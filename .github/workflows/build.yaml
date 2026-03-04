@@ -1,4 +1,7 @@
-name: Build Add-on
+name: Builder
+
+env:
+  BUILD_ARGS: "--test"
 
 on:
   push:
@@ -6,13 +9,13 @@ on:
   pull_request:
     branches: [main]
 
-env:
-  BUILD_ARGS: "--test"
-
 jobs:
   build:
     name: Build ${{ matrix.arch }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -21,10 +24,17 @@ jobs:
           - aarch64
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Determine build mode
+        run: |
+          if [[ -z "${{ github.head_ref }}" ]] && [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "BUILD_ARGS=" >> $GITHUB_ENV;
+          fi
 
       - name: Login to GitHub Container Registry
-        if: github.event_name == 'push'
+        if: env.BUILD_ARGS != '--test'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -32,10 +42,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build add-on
-        uses: home-assistant/builder@master
+        uses: home-assistant/builder@2026.02.1
         with:
           args: |
-            ${{ env.BUILD_ARGS }}
-            --${{ matrix.arch }}
-            --target alarmdotcom_cameras
-            --docker-hub ghcr.io/${{ github.repository_owner }}
+            ${{ env.BUILD_ARGS }} \
+            --${{ matrix.arch }} \
+            --target /data/alarmdotcom_cameras \
+            --image "alarmdotcom-cameras-{arch}" \
+            --docker-hub "ghcr.io/${{ github.repository_owner }}" \
+            --addon

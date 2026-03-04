@@ -17,14 +17,25 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Alarm.com Cameras add-on")
     parser.add_argument("--port", type=int, default=8099)
-    parser.add_argument("--snapshot-interval", type=int, default=10,
-                        help="Minutes between periodic snapshots")
+    parser.add_argument(
+        "--snapshot-interval",
+        type=int,
+        default=10,
+        help="Minutes between periodic snapshots",
+    )
     parser.add_argument("--stream-fps", type=float, default=1.0)
-    parser.add_argument("--stream-timeout", type=int, default=5,
-                        help="Minutes before auto-stopping a stream")
+    parser.add_argument(
+        "--stream-timeout",
+        type=int,
+        default=5,
+        help="Minutes before auto-stopping a stream",
+    )
     parser.add_argument("--jpeg-quality", type=int, default=80)
-    parser.add_argument("--trusted-device-name", default="HA Alarm.com Cameras",
-                        help="Device name when trusting this browser after 2FA")
+    parser.add_argument(
+        "--trusted-device-name",
+        default="HA Alarm.com Cameras",
+        help="Device name when trusting this browser after 2FA",
+    )
     parser.add_argument("--log-level", default="info")
     parser.add_argument("--data-dir", default="/data")
     return parser.parse_args()
@@ -61,12 +72,16 @@ async def session_health_task(app: web.Application) -> None:
                     logger.warning("Session expired, attempting re-login...")
                     creds = cred_store.load()
                     if creds:
-                        status = await browser.login(creds["username"], creds["password"])
+                        status = await browser.login(
+                            creds["username"], creds["password"]
+                        )
                         if status.value == "authenticated":
                             logger.info("Re-login successful")
                             await browser.discover_cameras()
                         elif status.value in ("captcha_required", "2fa_required"):
-                            logger.warning("Re-login requires user action: %s", status.value)
+                            logger.warning(
+                                "Re-login requires user action: %s", status.value
+                            )
                         else:
                             logger.error("Re-login failed: %s", status.value)
         except asyncio.CancelledError:
@@ -105,7 +120,8 @@ async def periodic_snapshot_task(app: web.Application) -> None:
                 if browser.state.active_stream_camera:
                     logger.debug(
                         "Skipping snapshot for %s: stream active on %s",
-                        camera.id, browser.state.active_stream_camera,
+                        camera.id,
+                        browser.state.active_stream_camera,
                     )
                     continue
 
@@ -113,11 +129,14 @@ async def periodic_snapshot_task(app: web.Application) -> None:
                 if error_counts.get(camera.id, 0) >= MAX_CONSECUTIVE_ERRORS:
                     logger.debug(
                         "Skipping snapshot for %s: %d consecutive errors",
-                        camera.id, error_counts[camera.id],
+                        camera.id,
+                        error_counts[camera.id],
                     )
                     continue
 
-                logger.info("Periodic snapshot for camera %s (%s)", camera.id, camera.name)
+                logger.info(
+                    "Periodic snapshot for camera %s (%s)", camera.id, camera.name
+                )
                 async with browser._lock:
                     result = await browser.capture_snapshot(camera.id)
 
@@ -125,13 +144,16 @@ async def periodic_snapshot_task(app: web.Application) -> None:
                     error_counts[camera.id] = 0
                     logger.info(
                         "Snapshot captured for %s (%d bytes)",
-                        camera.id, len(result),
+                        camera.id,
+                        len(result),
                     )
                 else:
                     error_counts[camera.id] = error_counts.get(camera.id, 0) + 1
                     logger.warning(
                         "Snapshot failed for %s (attempt %d/%d)",
-                        camera.id, error_counts[camera.id], MAX_CONSECUTIVE_ERRORS,
+                        camera.id,
+                        error_counts[camera.id],
+                        MAX_CONSECUTIVE_ERRORS,
                     )
 
                 # Brief pause between cameras to avoid hammering

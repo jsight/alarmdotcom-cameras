@@ -1,6 +1,5 @@
 """Camera platform for Alarm.com Cameras integration."""
 
-import asyncio
 import logging
 from datetime import timedelta
 
@@ -199,7 +198,9 @@ class AlarmDotComCamera(Camera):
                     self._last_image = await resp.read()
                     _LOGGER.info("On-demand snapshot captured for %s", self._camera_id)
         except Exception:
-            _LOGGER.exception("Failed to capture on-demand snapshot for %s", self._camera_id)
+            _LOGGER.exception(
+                "Failed to capture on-demand snapshot for %s", self._camera_id
+            )
 
     async def async_turn_off(self) -> None:
         """Stop streaming."""
@@ -207,7 +208,7 @@ class AlarmDotComCamera(Camera):
             async with self._session.post(
                 f"{self._addon_url}/api/stream/{self._camera_id}/stop",
                 timeout=aiohttp.ClientTimeout(total=5),
-            ) as resp:
+            ):
                 pass
         except Exception:
             pass

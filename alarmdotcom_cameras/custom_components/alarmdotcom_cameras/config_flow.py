@@ -38,9 +38,7 @@ class AlarmDotComCamerasConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(
-        self, user_input: dict | None = None
-    ) -> FlowResult:
+    async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
         """Handle the initial step."""
         errors = {}
 
@@ -67,8 +65,10 @@ class AlarmDotComCamerasConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_ADDON_URL, default=suggested_url): str,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_ADDON_URL, default=suggested_url): str,
+                }
+            ),
             errors=errors,
         )

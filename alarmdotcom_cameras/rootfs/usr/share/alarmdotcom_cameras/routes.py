@@ -16,6 +16,7 @@ STATIC_DIR = pathlib.Path(__file__).parent / "static"
 
 # ---- Health ----
 
+
 async def health_check(request: web.Request) -> web.Response:
     """Health check endpoint used by HA watchdog."""
     browser: BrowserEngine = request.app["browser"]
@@ -34,13 +35,16 @@ async def health_check(request: web.Request) -> web.Response:
 
 # ---- Credentials ----
 
+
 async def get_credentials_status(request: web.Request) -> web.Response:
     """Check if credentials have been configured."""
     cred_store: CredentialStore = request.app["credentials"]
-    return web.json_response({
-        "configured": cred_store.is_configured(),
-        "username": cred_store.get_username(),
-    })
+    return web.json_response(
+        {
+            "configured": cred_store.is_configured(),
+            "username": cred_store.get_username(),
+        }
+    )
 
 
 async def save_credentials(request: web.Request) -> web.Response:
@@ -66,6 +70,7 @@ async def save_credentials(request: web.Request) -> web.Response:
 
 # ---- Auth ----
 
+
 async def get_auth_status(request: web.Request) -> web.Response:
     """Get current authentication status."""
     browser: BrowserEngine = request.app["browser"]
@@ -79,9 +84,7 @@ async def trigger_login(request: web.Request) -> web.Response:
 
     creds = cred_store.load()
     if not creds:
-        return web.json_response(
-            {"error": "No credentials configured"}, status=400
-        )
+        return web.json_response({"error": "No credentials configured"}, status=400)
 
     status = await browser.login(creds["username"], creds["password"])
     result = browser.get_auth_status()
@@ -141,6 +144,7 @@ async def solve_auth_challenge(request: web.Request) -> web.Response:
 
 # ---- Cameras ----
 
+
 async def list_cameras(request: web.Request) -> web.Response:
     """List discovered cameras with snapshot metadata."""
     browser: BrowserEngine = request.app["browser"]
@@ -165,10 +169,12 @@ async def refresh_cameras(request: web.Request) -> web.Response:
     """Force camera re-discovery (bypasses TTL cache)."""
     browser: BrowserEngine = request.app["browser"]
     cameras = await browser.discover_cameras(force=True)
-    return web.json_response({
-        "status": "ok",
-        "cameras": len(cameras),
-    })
+    return web.json_response(
+        {
+            "status": "ok",
+            "cameras": len(cameras),
+        }
+    )
 
 
 async def get_snapshot_metadata(request: web.Request) -> web.Response:
@@ -187,6 +193,7 @@ async def get_snapshot_metadata(request: web.Request) -> web.Response:
 
 
 # ---- Snapshots ----
+
 
 async def get_snapshot(request: web.Request) -> web.Response:
     """Get latest cached snapshot for a camera."""
@@ -228,6 +235,7 @@ async def capture_snapshot(request: web.Request) -> web.Response:
 
 
 # ---- Streams ----
+
 
 async def get_stream(request: web.Request) -> web.Response:
     """MJPEG stream for a camera (screenshot loop)."""
@@ -279,14 +287,14 @@ async def start_stream(request: web.Request) -> web.Response:
     # Verify camera exists
     camera = next((c for c in browser.state.cameras if c.id == camera_id), None)
     if not camera:
-        return web.json_response(
-            {"error": f"Camera {camera_id} not found"}, status=404
-        )
+        return web.json_response({"error": f"Camera {camera_id} not found"}, status=404)
 
-    return web.json_response({
-        "status": "ready",
-        "stream_url": f"/api/stream/{camera_id}",
-    })
+    return web.json_response(
+        {
+            "status": "ready",
+            "stream_url": f"/api/stream/{camera_id}",
+        }
+    )
 
 
 async def stop_stream(request: web.Request) -> web.Response:
@@ -304,6 +312,7 @@ async def get_stream_status(request: web.Request) -> web.Response:
 
 # ---- Debug ----
 
+
 async def get_debug_screenshot(request: web.Request) -> web.Response:
     """Get the latest debug screenshot (login page, etc.)."""
     name = request.match_info.get("name", "login_page")
@@ -313,13 +322,17 @@ async def get_debug_screenshot(request: web.Request) -> web.Response:
     if not screenshot_path.exists():
         return web.json_response({"error": "No debug screenshot available"}, status=404)
 
-    return web.FileResponse(screenshot_path, headers={
-        "Content-Type": "image/png",
-        "Cache-Control": "no-cache",
-    })
+    return web.FileResponse(
+        screenshot_path,
+        headers={
+            "Content-Type": "image/png",
+            "Cache-Control": "no-cache",
+        },
+    )
 
 
 # ---- Browser Profile ----
+
 
 async def clear_browser_profile(request: web.Request) -> web.Response:
     """Clear the browser profile (cookies, cache, etc.) and restart."""
@@ -331,6 +344,7 @@ async def clear_browser_profile(request: web.Request) -> web.Response:
 
 # ---- Web UI ----
 
+
 async def index(request: web.Request) -> web.Response:
     """Serve the web UI."""
     index_path = STATIC_DIR / "index.html"
@@ -340,6 +354,7 @@ async def index(request: web.Request) -> web.Response:
 
 
 # ---- Route setup ----
+
 
 def setup_routes(app: web.Application) -> None:
     """Register all HTTP routes."""

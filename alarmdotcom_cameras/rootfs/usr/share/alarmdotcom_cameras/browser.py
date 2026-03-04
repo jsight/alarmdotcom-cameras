@@ -41,7 +41,7 @@ SELECTORS = {
     "trust_device_skip": 'button:has-text("Skip")',
     # Camera list / live view page
     "camera_item": '.video-camera-card, .camera-item, [class*="camera-card"], [data-camera-id]',
-    "camera_name": '.camera-name, .camera-description, .device-name, .bottom-bar-camera-name, h3, h4',
+    "camera_name": ".camera-name, .camera-description, .device-name, .bottom-bar-camera-name, h3, h4",
     "camera_link": 'a[href*="video"], a[href*="camera"]',
     # Video player (for snapshots)
     "video_element": 'video, canvas, .video-player, .webrtc-player, [class*="video-container"], [class*="video-stream"], [class*="live-view"]',
@@ -101,8 +101,12 @@ class BrowserEngine:
 
     CAMERA_CACHE_TTL = 3600  # 1 hour default
 
-    def __init__(self, data_dir: str, jpeg_quality: int = 80,
-                 trusted_device_name: str = "HA Alarm.com Cameras") -> None:
+    def __init__(
+        self,
+        data_dir: str,
+        jpeg_quality: int = 80,
+        trusted_device_name: str = "HA Alarm.com Cameras",
+    ) -> None:
         self._data_dir = data_dir
         self._jpeg_quality = jpeg_quality
         self._trusted_device_name = trusted_device_name
@@ -222,8 +226,12 @@ class BrowserEngine:
             try:
                 debug_dir = pathlib.Path(self._data_dir) / "debug"
                 debug_dir.mkdir(exist_ok=True)
-                await page.screenshot(path=str(debug_dir / "login_page.png"), full_page=True)
-                logger.debug("Saved login page screenshot to %s", debug_dir / "login_page.png")
+                await page.screenshot(
+                    path=str(debug_dir / "login_page.png"), full_page=True
+                )
+                logger.debug(
+                    "Saved login page screenshot to %s", debug_dir / "login_page.png"
+                )
             except Exception:
                 pass
 
@@ -361,10 +369,14 @@ class BrowserEngine:
             pass
 
         if error_msg:
-            self.state.auth_message = f"2FA code rejected: {error_msg}. Try again or resend code."
+            self.state.auth_message = (
+                f"2FA code rejected: {error_msg}. Try again or resend code."
+            )
             logger.info("2FA error message: %s", error_msg)
         else:
-            self.state.auth_message = "Two-factor authentication required. Enter your code."
+            self.state.auth_message = (
+                "Two-factor authentication required. Enter your code."
+            )
 
         return AuthStatus.TWO_FA_REQUIRED
 
@@ -391,8 +403,10 @@ class BrowserEngine:
 
     async def _handle_trust_device(self, page: Page) -> AuthStatus:
         """Auto-fill device name and trust the device."""
-        logger.info("Trust device page detected - auto-trusting as '%s'",
-                     self._trusted_device_name)
+        logger.info(
+            "Trust device page detected - auto-trusting as '%s'",
+            self._trusted_device_name,
+        )
 
         try:
             # Debug: dump the page elements
@@ -421,7 +435,7 @@ class BrowserEngine:
                 # Fallback: the input with id two-factor-authentication-input-field
                 # which alarm.com reuses for the device name field
                 name_input = await page.query_selector(
-                    '#two-factor-authentication-input-field'
+                    "#two-factor-authentication-input-field"
                 )
 
             if name_input:
@@ -454,7 +468,9 @@ class BrowserEngine:
                 await asyncio.sleep(1)
                 current_url = page.url
                 if current_url != pre_url:
-                    logger.info("Trust device redirected: %s -> %s", pre_url, current_url)
+                    logger.info(
+                        "Trust device redirected: %s -> %s", pre_url, current_url
+                    )
                     await page.wait_for_load_state("networkidle", timeout=15_000)
                     break
                 # Check if button is still processing
@@ -481,8 +497,11 @@ class BrowserEngine:
             # If still on the 2FA flow page, try navigating to the dashboard
             if "two-factor" in current_url or "login-setup" in current_url:
                 logger.info("Still on 2FA flow page, navigating to dashboard...")
-                await page.goto(f"{ALARM_BASE_URL}/web/system/home",
-                                wait_until="networkidle", timeout=15_000)
+                await page.goto(
+                    f"{ALARM_BASE_URL}/web/system/home",
+                    wait_until="networkidle",
+                    timeout=15_000,
+                )
 
             # Check if we're now logged in
             final_url = page.url
@@ -506,9 +525,12 @@ class BrowserEngine:
             screenshot = await page.screenshot(full_page=True)
             self.state.challenge_screenshot = screenshot
             self.state.auth_status = AuthStatus.ERROR
-            self.state.auth_message = "Trust device step completed but not authenticated"
-            logger.warning("Trust device completed but auth check failed (URL: %s)",
-                          page.url)
+            self.state.auth_message = (
+                "Trust device step completed but not authenticated"
+            )
+            logger.warning(
+                "Trust device completed but auth check failed (URL: %s)", page.url
+            )
             return AuthStatus.ERROR
 
         except Exception as e:
@@ -661,7 +683,10 @@ class BrowserEngine:
                     logger.debug("2FA page links/buttons:\n%s", page_links[:3000])
                 except Exception:
                     pass
-                return {"success": False, "error": "Could not find resend link on the page"}
+                return {
+                    "success": False,
+                    "error": "Could not find resend link on the page",
+                }
 
             await resend_elem.click()
             logger.info("Clicked 2FA resend code button")
@@ -672,9 +697,7 @@ class BrowserEngine:
 
             # Wait for the 2FA input to reappear (Ember re-renders the component)
             try:
-                await page.wait_for_selector(
-                    SELECTORS["twofa_element"], timeout=5_000
-                )
+                await page.wait_for_selector(SELECTORS["twofa_element"], timeout=5_000)
             except Exception:
                 logger.debug("2FA input not found after resend, page may have changed")
 
@@ -742,8 +765,9 @@ class BrowserEngine:
 
             # If we're still not on /video, try direct navigation
             if "/video" not in page.url:
-                logger.debug("Not on video page (URL: %s), navigating directly",
-                            page.url)
+                logger.debug(
+                    "Not on video page (URL: %s), navigating directly", page.url
+                )
                 await page.goto(CAMERAS_URL, wait_until="networkidle", timeout=30_000)
                 await asyncio.sleep(5)
 
@@ -751,8 +775,9 @@ class BrowserEngine:
             try:
                 debug_dir = pathlib.Path(self._data_dir) / "debug"
                 debug_dir.mkdir(exist_ok=True)
-                await page.screenshot(path=str(debug_dir / "cameras_page.png"),
-                                       full_page=True)
+                await page.screenshot(
+                    path=str(debug_dir / "cameras_page.png"), full_page=True
+                )
                 logger.debug("Saved cameras page screenshot")
 
                 page_info = await page.evaluate("""
@@ -798,16 +823,18 @@ class BrowserEngine:
                     '.video-camera-card, .camera-item, [class*="camera-card"], [data-camera-id]'
                 )
                 for i, elem in enumerate(camera_elements):
-                    cam_id = (await elem.get_attribute("data-camera-id") or
-                              f"camera_{i}")
+                    cam_id = await elem.get_attribute("data-camera-id") or f"camera_{i}"
                     name_elem = await elem.query_selector(SELECTORS["camera_name"])
-                    name = (await name_elem.inner_text() if name_elem
-                            else f"Camera {i + 1}")
-                    cameras.append(CameraInfo(
-                        id=cam_id.strip(),
-                        name=name.strip(),
-                        url=page.url,
-                    ))
+                    name = (
+                        await name_elem.inner_text() if name_elem else f"Camera {i + 1}"
+                    )
+                    cameras.append(
+                        CameraInfo(
+                            id=cam_id.strip(),
+                            name=name.strip(),
+                            url=page.url,
+                        )
+                    )
                 if cameras:
                     logger.debug("DOM card discovery found %d cameras", len(cameras))
 
@@ -827,14 +854,17 @@ class BrowserEngine:
                             screenshot = await video_elem.screenshot()
                             jpeg = self._to_jpeg(screenshot)
                             self._save_snapshot(cam.id, jpeg)
-                            logger.info("Initial snapshot for %s (%d bytes)",
-                                       cam.name, len(jpeg))
+                            logger.info(
+                                "Initial snapshot for %s (%d bytes)",
+                                cam.name,
+                                len(jpeg),
+                            )
                     except Exception:
                         logger.debug("Failed initial snapshot for %s", cam.id)
 
             return cameras
 
-        except Exception as e:
+        except Exception:
             logger.exception("Camera discovery failed")
             return self.state.cameras  # Return cached list on failure
 
@@ -875,17 +905,21 @@ class BrowserEngine:
                 }
             """)
 
-            logger.debug("Camera API discovery result: %s",
-                        str(result)[:2000] if result else "None")
+            logger.debug(
+                "Camera API discovery result: %s",
+                str(result)[:2000] if result else "None",
+            )
 
             if result and isinstance(result, dict):
                 api_data = result.get("data", result)
                 # Handle nested response structure
                 if isinstance(api_data, dict):
-                    camera_data = (api_data.get("data", []) or
-                                   api_data.get("cameras", []) or
-                                   api_data.get("devices", []) or
-                                   api_data.get("value", []))
+                    camera_data = (
+                        api_data.get("data", [])
+                        or api_data.get("cameras", [])
+                        or api_data.get("devices", [])
+                        or api_data.get("value", [])
+                    )
                 elif isinstance(api_data, list):
                     camera_data = api_data
                 else:
@@ -895,20 +929,30 @@ class BrowserEngine:
                     for cam in camera_data:
                         if not isinstance(cam, dict):
                             continue
-                        cam_id = str(cam.get("id", cam.get("deviceId",
-                                     cam.get("deviceID", ""))))
-                        name = cam.get("description", cam.get("name",
-                               cam.get("deviceName", f"Camera {cam_id}")))
-                        model = cam.get("model", cam.get("deviceModel",
-                                cam.get("deviceModelName", "")))
-                        cameras.append(CameraInfo(
-                            id=cam_id,
-                            name=name,
-                            model=model,
-                            status="online",
-                        ))
-                    logger.debug("API discovery found %d cameras from %s",
-                                len(cameras), result.get("endpoint", "unknown"))
+                        cam_id = str(
+                            cam.get("id", cam.get("deviceId", cam.get("deviceID", "")))
+                        )
+                        name = cam.get(
+                            "description",
+                            cam.get("name", cam.get("deviceName", f"Camera {cam_id}")),
+                        )
+                        model = cam.get(
+                            "model",
+                            cam.get("deviceModel", cam.get("deviceModelName", "")),
+                        )
+                        cameras.append(
+                            CameraInfo(
+                                id=cam_id,
+                                name=name,
+                                model=model,
+                                status="online",
+                            )
+                        )
+                    logger.debug(
+                        "API discovery found %d cameras from %s",
+                        len(cameras),
+                        result.get("endpoint", "unknown"),
+                    )
         except Exception:
             logger.debug("API-based camera discovery failed, falling back to DOM")
 
@@ -1007,11 +1051,13 @@ class BrowserEngine:
                         url = cam.get("url", "")
                         if url and not url.startswith("http"):
                             url = f"{ALARM_BASE_URL}{url}"
-                        cameras.append(CameraInfo(
-                            id=cam_id,
-                            name=cam.get("name", f"Camera {cam_id}"),
-                            url=url,
-                        ))
+                        cameras.append(
+                            CameraInfo(
+                                id=cam_id,
+                                name=cam.get("name", f"Camera {cam_id}"),
+                                url=url,
+                            )
+                        )
                 if cameras:
                     logger.info("Page scrape found %d camera(s)", len(cameras))
 
@@ -1090,8 +1136,11 @@ class BrowserEngine:
                 screenshot_bytes = await video_elem.screenshot()
                 jpeg_bytes = self._to_jpeg(screenshot_bytes)
                 self._save_snapshot(camera_id, jpeg_bytes)
-                logger.info("Snapshot captured for camera %s (%d bytes)",
-                           camera_id, len(jpeg_bytes))
+                logger.info(
+                    "Snapshot captured for camera %s (%d bytes)",
+                    camera_id,
+                    len(jpeg_bytes),
+                )
                 return jpeg_bytes
 
             # Fallback: screenshot the main content area
@@ -1178,7 +1227,9 @@ class BrowserEngine:
         snapshot cache for the camera.
         """
         if self.state.active_stream_camera:
-            logger.info("Stopping existing stream for %s", self.state.active_stream_camera)
+            logger.info(
+                "Stopping existing stream for %s", self.state.active_stream_camera
+            )
             await self.stop_stream()
             # Brief wait for the previous generator to wind down
             await asyncio.sleep(0.5)
@@ -1244,7 +1295,9 @@ class BrowserEngine:
             frames = self.state.stream_frame_count
             logger.info(
                 "Stream ended for %s: %d frames in %.1fs (%.2f actual fps)",
-                camera_id, frames, duration,
+                camera_id,
+                frames,
+                duration,
                 frames / duration if duration > 0 else 0,
             )
             self.state.active_stream_camera = None
@@ -1333,7 +1386,10 @@ class BrowserEngine:
             # Restart with fresh profile
             await self.start()
 
-            return {"success": True, "message": "Browser profile cleared and browser restarted"}
+            return {
+                "success": True,
+                "message": "Browser profile cleared and browser restarted",
+            }
         except Exception as e:
             logger.exception("Failed to clear browser profile")
             return {"success": False, "error": str(e)}
@@ -1351,7 +1407,8 @@ class BrowserEngine:
             "cameras_count": len(self.state.cameras),
             "cameras_cache_age": (
                 int(now - self.state.cameras_discovered_at)
-                if self.state.cameras_discovered_at else None
+                if self.state.cameras_discovered_at
+                else None
             ),
             "active_stream": self.state.active_stream_camera,
         }
