@@ -1,0 +1,20 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Alarm.com Cameras Add-on",
+        "description": "Enter the URL of the Alarm.com Cameras add-on. If the add-on is running on the same machine, the default should work.",
+        "data": {
+          "addon_url": "Add-on URL"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect to the add-on. Make sure it is running and the URL is correct.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This add-on is already configured."
+    }
+  }
+}

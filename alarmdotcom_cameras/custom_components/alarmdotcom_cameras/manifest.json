@@ -1,0 +1,11 @@
+{
+  "domain": "alarmdotcom_cameras",
+  "name": "Alarm.com Cameras",
+  "codeowners": ["@jsightler"],
+  "config_flow": true,
+  "documentation": "https://github.com/jsightler/alarmdotcom-cameras",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/jsightler/alarmdotcom-cameras/issues",
+  "requirements": ["aiohttp>=3.9.0"],
+  "version": "0.1.0"
+}

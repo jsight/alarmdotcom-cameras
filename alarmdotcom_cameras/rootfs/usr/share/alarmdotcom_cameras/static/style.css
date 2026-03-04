@@ -1,0 +1,406 @@
+/* Alarm.com Cameras - Add-on Web UI */
+
+:root {
+    --primary: #03a9f4;
+    --primary-dark: #0288d1;
+    --success: #4caf50;
+    --warning: #ff9800;
+    --danger: #f44336;
+    --bg: #f5f5f5;
+    --card-bg: #ffffff;
+    --text: #212121;
+    --text-secondary: #757575;
+    --border: #e0e0e0;
+    --radius: 8px;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 16px;
+}
+
+/* Header */
+header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+header h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+}
+
+/* Auth badge */
+.badge {
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.badge-unknown { background: var(--border); color: var(--text-secondary); }
+.badge-ok { background: var(--success); color: white; }
+.badge-warning { background: var(--warning); color: white; }
+.badge-error { background: var(--danger); color: white; }
+
+/* Navigation tabs */
+nav {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 16px;
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 0;
+}
+
+.tab {
+    padding: 8px 16px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.tab:hover {
+    color: var(--text);
+}
+
+.tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+    font-weight: 600;
+}
+
+/* Tab content */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Cards */
+.card {
+    background: var(--card-bg);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+}
+
+.card h2 {
+    font-size: 1.1rem;
+    margin-bottom: 12px;
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.card-header h2 {
+    margin-bottom: 0;
+}
+
+/* Forms */
+label {
+    display: block;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+    margin-top: 12px;
+    color: var(--text-secondary);
+}
+
+label:first-of-type {
+    margin-top: 0;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"] {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+}
+
+input:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(3, 169, 244, 0.2);
+}
+
+button[type="submit"],
+.btn-primary {
+    display: inline-block;
+    margin-top: 16px;
+    padding: 8px 24px;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+button[type="submit"]:hover,
+.btn-primary:hover {
+    background: var(--primary-dark);
+}
+
+button[type="submit"]:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-small {
+    padding: 4px 12px;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.8rem;
+    cursor: pointer;
+}
+
+.btn-small:hover {
+    background: var(--primary-dark);
+}
+
+.btn-danger {
+    background: var(--danger);
+}
+
+.btn-danger:hover {
+    background: #d32f2f;
+}
+
+/* Camera grid */
+.cameras-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.camera-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.camera-card .thumbnail {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    background: #eee;
+    display: block;
+}
+
+.camera-card .camera-info {
+    padding: 8px 12px;
+}
+
+.camera-card .camera-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.camera-card .camera-meta {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.camera-card .camera-actions {
+    padding: 8px 12px;
+    display: flex;
+    gap: 8px;
+}
+
+/* Live view */
+#live-view-container img {
+    width: 100%;
+    border-radius: var(--radius);
+    background: #000;
+}
+
+/* Challenge image */
+#challenge-image-container img {
+    max-width: 100%;
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+}
+
+/* Definition lists */
+dl {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 4px 16px;
+}
+
+dt {
+    font-weight: 600;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+dd {
+    font-size: 0.9rem;
+}
+
+/* Toast notifications */
+#toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+}
+
+.toast {
+    padding: 10px 16px;
+    border-radius: var(--radius);
+    margin-top: 8px;
+    font-size: 0.85rem;
+    color: white;
+    animation: toast-in 0.3s ease-out;
+    max-width: 320px;
+}
+
+.toast-success { background: var(--success); }
+.toast-error { background: var(--danger); }
+.toast-info { background: var(--primary); }
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Credential status */
+.cred-status-ok {
+    color: var(--success);
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+}
+
+.cred-status-none {
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+}
+
+/* Button disabled states */
+.btn-small:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Utility */
+.placeholder {
+    color: var(--text-secondary);
+    font-style: italic;
+    text-align: center;
+    padding: 24px;
+}
+
+.note {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+/* Responsive */
+@media (max-width: 600px) {
+    body {
+        padding: 8px;
+    }
+
+    nav {
+        overflow-x: auto;
+    }
+
+    .cameras-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+.challenge-buttons {
+    display: flex;
+    gap: 12px;
+    margin-top: 16px;
+    align-items: center;
+}
+
+.challenge-buttons button[type="submit"],
+.challenge-buttons button[type="button"] {
+    margin-top: 0;
+}
+
+.btn-secondary {
+    display: inline-block;
+    padding: 8px 24px;
+    background: transparent;
+    color: var(--primary);
+    border: 2px solid var(--primary);
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s;
+}
+
+.btn-secondary:hover {
+    background: var(--primary);
+    color: white;
+}
+
+.btn-secondary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.btn-danger-full {
+    display: inline-block;
+    margin-top: 12px;
+    padding: 8px 24px;
+    background: var(--danger);
+    color: white;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.btn-danger-full:hover {
+    background: #d32f2f;
+}
+
+.btn-danger-full:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}

@@ -1,0 +1,15 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Called when the service exits
+# ==============================================================================
+declare exit_code="${1}"
+
+if [[ "${exit_code}" != "0" ]] && [[ "${exit_code}" != "256" ]]; then
+    bashio::log.warning "Alarm.com Cameras exited with code ${exit_code}"
+    # If the process crashes, halt the container so the watchdog can restart us
+    echo "${exit_code}" > /run/s6-linux-init-container-results/exitcode
+    exec /run/s6/basedir/bin/halt
+fi
+
+bashio::log.info "Alarm.com Cameras stopped"

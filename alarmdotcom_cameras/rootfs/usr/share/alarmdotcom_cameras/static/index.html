@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alarm.com Cameras</title>
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+    <header>
+        <h1>Alarm.com Cameras</h1>
+        <div id="auth-badge" class="badge badge-unknown">--</div>
+    </header>
+
+    <nav>
+        <button class="tab active" data-tab="setup">Setup</button>
+        <button class="tab" data-tab="cameras">Cameras</button>
+        <button class="tab" data-tab="settings">Settings</button>
+        <button class="tab" data-tab="status">Status</button>
+    </nav>
+
+    <!-- Setup Tab -->
+    <section id="tab-setup" class="tab-content active">
+        <div class="card">
+            <h2>Alarm.com Credentials</h2>
+            <p id="cred-status">Checking credential status...</p>
+            <form id="credentials-form">
+                <label for="username">Email / Username</label>
+                <input type="email" id="username" name="username" required
+                       placeholder="your-email@example.com">
+
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" required
+                       placeholder="Your alarm.com password">
+
+                <button type="submit" id="save-login-btn">Save &amp; Login</button>
+            </form>
+        </div>
+
+        <div class="card" id="challenge-card" style="display: none;">
+            <h2>Authentication Challenge</h2>
+            <p id="challenge-description">A CAPTCHA or 2FA code is required.</p>
+            <div id="challenge-image-container">
+                <img id="challenge-image" alt="Challenge screenshot" style="display: none;">
+            </div>
+            <form id="challenge-form">
+                <label for="challenge-solution">Enter solution</label>
+                <input type="text" id="challenge-solution" name="solution" required
+                       placeholder="CAPTCHA text or 2FA code">
+                <div class="challenge-buttons">
+                    <button type="submit">Submit</button>
+                    <button type="button" id="resend-code-btn" class="btn-secondary" style="display: none;">Resend Code</button>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <!-- Cameras Tab -->
+    <section id="tab-cameras" class="tab-content">
+        <div class="card">
+            <div class="card-header">
+                <h2>Cameras</h2>
+                <button id="refresh-cameras-btn" class="btn-small">Refresh</button>
+            </div>
+            <div id="cameras-grid" class="cameras-grid">
+                <p class="placeholder">No cameras discovered yet. Configure credentials and log in first.</p>
+            </div>
+        </div>
+
+        <div class="card" id="live-view-card" style="display: none;">
+            <div class="card-header">
+                <h2>Live View: <span id="live-camera-name">--</span></h2>
+                <button id="stop-stream-btn" class="btn-small btn-danger">Stop</button>
+            </div>
+            <div id="live-view-container">
+                <img id="live-stream" alt="Live stream">
+            </div>
+        </div>
+    </section>
+
+    <!-- Settings Tab -->
+    <section id="tab-settings" class="tab-content">
+        <div class="card">
+            <h2>Settings</h2>
+            <p class="note">Core settings are managed in the Home Assistant add-on configuration.
+               These are informational.</p>
+            <dl id="settings-list">
+                <dt>Snapshot Interval</dt>
+                <dd id="setting-snapshot-interval">--</dd>
+                <dt>Stream FPS</dt>
+                <dd id="setting-stream-fps">--</dd>
+                <dt>Stream Timeout</dt>
+                <dd id="setting-stream-timeout">--</dd>
+                <dt>JPEG Quality</dt>
+                <dd id="setting-jpeg-quality">--</dd>
+                <dt>Trusted Device Name</dt>
+                <dd id="setting-trusted-device-name">--</dd>
+            </dl>
+        </div>
+        <div class="card">
+            <h2>Browser Profile</h2>
+            <p class="note">The browser profile stores cookies and session data so you don't need to
+               re-authenticate after restarts. Clear it if you're having login issues.</p>
+            <button type="button" id="clear-profile-btn" class="btn-danger-full">Clear Browser Profile</button>
+        </div>
+    </section>
+
+    <!-- Status Tab -->
+    <section id="tab-status" class="tab-content">
+        <div class="card">
+            <h2>Add-on Status</h2>
+            <dl id="status-list">
+                <dt>Version</dt>
+                <dd id="status-version">--</dd>
+                <dt>Uptime</dt>
+                <dd id="status-uptime">--</dd>
+                <dt>Browser Engine</dt>
+                <dd id="status-browser">--</dd>
+                <dt>Auth Status</dt>
+                <dd id="status-auth">--</dd>
+                <dt>Last Auth</dt>
+                <dd id="status-last-auth">--</dd>
+                <dt>Cameras Discovered</dt>
+                <dd id="status-cameras">--</dd>
+                <dt>Camera Cache Age</dt>
+                <dd id="status-cache-age">--</dd>
+                <dt>Last Snapshot</dt>
+                <dd id="status-last-snapshot">--</dd>
+                <dt>Stream Active</dt>
+                <dd id="status-stream">--</dd>
+            </dl>
+        </div>
+    </section>
+
+    <div id="toast-container"></div>
+
+    <script src="static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: Lint Python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install ruff
+
+      - name: Ruff check
+        run: ruff check alarmdotcom_cameras/rootfs/usr/share/alarmdotcom_cameras/ custom_components/
+
+      - name: Ruff format check
+        run: ruff format --check alarmdotcom_cameras/rootfs/usr/share/alarmdotcom_cameras/ custom_components/
+
+  addon-lint:
+    name: Lint Add-on Config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate add-on config
+        run: |
+          python3 -c "
+          import yaml, sys
+          for f in ['alarmdotcom_cameras/config.yaml', 'alarmdotcom_cameras/build.yaml', 'repository.yaml']:
+              try:
+                  yaml.safe_load(open(f))
+                  print(f'  {f}: OK')
+              except Exception as e:
+                  print(f'  {f}: FAILED - {e}', file=sys.stderr)
+                  sys.exit(1)
+          "
+
+      - name: Validate manifest.json
+        run: |
+          python3 -c "
+          import json
+          m = json.load(open('custom_components/alarmdotcom_cameras/manifest.json'))
+          assert 'domain' in m, 'Missing domain'
+          assert 'version' in m, 'Missing version'
+          print('manifest.json: OK')
+          "

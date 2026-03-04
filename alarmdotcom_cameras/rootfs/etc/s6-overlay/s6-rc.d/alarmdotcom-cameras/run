@@ -1,0 +1,40 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+# ==============================================================================
+# Start Alarm.com Cameras service
+# ==============================================================================
+
+bashio::log.info "Starting Alarm.com Cameras add-on..."
+
+# Read configuration from /data/options.json via bashio
+declare snapshot_interval
+declare stream_fps
+declare stream_timeout
+declare jpeg_quality
+declare trusted_device_name
+declare log_level
+
+snapshot_interval=$(bashio::config 'snapshot_interval_minutes')
+stream_fps=$(bashio::config 'stream_fps')
+stream_timeout=$(bashio::config 'stream_timeout_minutes')
+jpeg_quality=$(bashio::config 'jpeg_quality')
+trusted_device_name=$(bashio::config 'trusted_device_name')
+log_level=$(bashio::config 'log_level')
+
+bashio::log.info "Config: snapshots every ${snapshot_interval}m, stream ${stream_fps}fps, timeout ${stream_timeout}m, JPEG quality ${jpeg_quality}%"
+
+# Ensure persistent data directories exist
+mkdir -p /data/snapshots
+mkdir -p /data/browser_state
+mkdir -p /data/credentials
+
+export PYTHONPATH="/usr/share:${PYTHONPATH}"
+exec /opt/venv/bin/python3 -m alarmdotcom_cameras.server \
+    --port 8099 \
+    --snapshot-interval "${snapshot_interval}" \
+    --stream-fps "${stream_fps}" \
+    --stream-timeout "${stream_timeout}" \
+    --jpeg-quality "${jpeg_quality}" \
+    --trusted-device-name "${trusted_device_name}" \
+    --log-level "${log_level}" \
+    --data-dir /data
