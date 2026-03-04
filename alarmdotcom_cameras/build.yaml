@@ -5,5 +5,5 @@ build_from:
 labels:
   org.opencontainers.image.title: "Home Assistant Add-on: Alarm.com Cameras"
   org.opencontainers.image.description: "Alarm.com camera snapshots and live view via headless browser"
-  org.opencontainers.image.source: "https://github.com/jsightler/alarmdotcom-cameras"
+  org.opencontainers.image.source: "https://github.com/jsight/alarmdotcom-cameras"
   org.opencontainers.image.licenses: "MIT"

@@ -1,8 +1,8 @@
 # Alarm.com Cameras for Home Assistant
 
-[![GitHub Release](https://img.shields.io/github/v/release/jsightler/alarmdotcom-cameras?style=flat-square)](https://github.com/jsightler/alarmdotcom-cameras/releases)
-[![License](https://img.shields.io/github/license/jsightler/alarmdotcom-cameras?style=flat-square)](LICENSE)
-[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/jsightler/alarmdotcom-cameras/build.yaml?style=flat-square&label=build)](https://github.com/jsightler/alarmdotcom-cameras/actions)
+[![GitHub Release](https://img.shields.io/github/v/release/jsight/alarmdotcom-cameras?style=flat-square)](https://github.com/jsight/alarmdotcom-cameras/releases)
+[![License](https://img.shields.io/github/license/jsight/alarmdotcom-cameras?style=flat-square)](LICENSE)
+[![GitHub Actions](https://img.shields.io/github/actions/workflow/status/jsight/alarmdotcom-cameras/build.yaml?style=flat-square&label=build)](https://github.com/jsight/alarmdotcom-cameras/actions)
 
 A Home Assistant add-on that brings **Alarm.com camera support** to your smart home. View snapshots and live video from your Alarm.com cameras directly in Home Assistant dashboards.
 
@@ -38,7 +38,7 @@ Alarm.com Website  <──  Headless Chromium (Playwright)
 In Home Assistant, go to **Settings > Add-ons > Add-on Store**, click the three-dot menu (**⋮**), select **Repositories**, and add:
 
 ```
-https://github.com/jsightler/alarmdotcom-cameras
+https://github.com/jsight/alarmdotcom-cameras
 ```
 
 ### Step 2: Install & Start
