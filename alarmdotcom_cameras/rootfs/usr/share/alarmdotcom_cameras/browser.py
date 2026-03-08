@@ -32,7 +32,7 @@ SELECTORS = {
     "logged_in_indicator": '#ctl00_phBody_CameraList, .video-page, .dashboard, [class*="dashboard"], .live-video-wrapper, section.cameras',
     # CAPTCHA / 2FA
     "captcha_element": 'iframe[src*="captcha"], [class*="captcha"], #captcha, .g-recaptcha, [data-sitekey]',
-    "twofa_element": '#two-factor-authentication-input-field, input[name*="code"], input[id*="twoFactor"], input[id*="code" i], input[placeholder*="code"], input[type="tel"], input[type="number"], input.two-factor-input, input[class*="two-factor"], input[class*="verification"]',
+    "twofa_element": '#two-factor-authentication-input-field, input[name*="code"], input[id*="twoFactor"], input[id*="code" i], input[placeholder*="code" i], input.two-factor-input, input[class*="two-factor"], input[class*="verification"]',
     "twofa_submit": 'button:has-text("Verify"), button.btn-color-primary, button[type="submit"], input[type="submit"]',
     "twofa_resend": '.request-new-code-button, button:has-text("Request a new code"), button:has-text("Resend"), a:has-text("Resend"), a:has-text("Request a new code"), [class*="resend" i]',
     # Trust device page (shown after successful 2FA)
@@ -235,6 +235,9 @@ class BrowserEngine:
             except Exception:
                 pass
 
+            # Dismiss cookie consent banner if present
+            await self._dismiss_cookie_banner(page)
+
             # Check for CAPTCHA before filling in credentials
             if await self._detect_captcha(page):
                 return await self._handle_captcha(page)
@@ -275,6 +278,7 @@ class BrowserEngine:
 
             # Wait for navigation
             await page.wait_for_load_state("networkidle", timeout=30_000)
+            logger.debug("Post-login URL: %s", page.url)
 
             # Check result
             if await self._detect_captcha(page):
@@ -294,11 +298,21 @@ class BrowserEngine:
                 return AuthStatus.AUTHENTICATED
 
             # Unknown state - take a screenshot for debugging
-            screenshot = await page.screenshot()
+            screenshot = await page.screenshot(full_page=True)
             self.state.challenge_screenshot = screenshot
             self.state.auth_status = AuthStatus.ERROR
-            self.state.auth_message = "Login failed - unexpected page state"
-            logger.warning("Login resulted in unexpected page state")
+            current_url = page.url
+            if "/login" in current_url.lower():
+                self.state.auth_message = (
+                    "Login failed - still on login page. "
+                    "Check credentials or dismiss any popups."
+                )
+                logger.warning("Login failed - still on login page: %s", current_url)
+            else:
+                self.state.auth_message = "Login failed - unexpected page state"
+                logger.warning(
+                    "Login resulted in unexpected page state: %s", current_url
+                )
             return AuthStatus.ERROR
 
         except Exception as e:
@@ -324,6 +338,25 @@ class BrowserEngine:
                 return "/login" not in url.lower()
         return False
 
+    async def _dismiss_cookie_banner(self, page: Page) -> None:
+        """Dismiss cookie consent banner if present on alarm.com."""
+        try:
+            # Look for common cookie consent accept buttons
+            accept_btn = await page.query_selector(
+                'button:has-text("Accept all Cookies"), '
+                'button:has-text("Accept All Cookies"), '
+                'button:has-text("Accept all cookies"), '
+                'button:has-text("Accept Cookies"), '
+                'a:has-text("Accept all Cookies"), '
+                '#onetrust-accept-btn-handler'
+            )
+            if accept_btn:
+                await accept_btn.click(force=True)
+                logger.info("Dismissed cookie consent banner")
+                await asyncio.sleep(1)
+        except Exception:
+            pass
+
     async def _detect_captcha(self, page: Page) -> bool:
         """Detect if a CAPTCHA challenge is present."""
         try:
@@ -335,6 +368,11 @@ class BrowserEngine:
     async def _detect_2fa(self, page: Page) -> bool:
         """Detect if a 2FA prompt is present."""
         try:
+            # Don't detect 2FA if we're still on the login page
+            url = page.url.lower()
+            if "/login" in url:
+                logger.debug("Still on login page, skipping 2FA detection")
+                return False
             element = await page.query_selector(SELECTORS["twofa_element"])
             return element is not None
         except Exception:
