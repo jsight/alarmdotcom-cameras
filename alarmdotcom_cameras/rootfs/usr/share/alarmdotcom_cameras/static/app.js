@@ -419,8 +419,20 @@
                     auth.status === "2fa_required" ? "" : "none";
                 // Focus the solution input
                 document.getElementById("challenge-solution").focus();
+            } else if (auth.status === "error") {
+                // Show challenge card with error screenshot if available
+                challengeCard.style.display = "";
+                var desc = document.getElementById("challenge-description");
+                desc.textContent = auth.message || "Login failed. See screenshot below for details.";
+                var img = document.getElementById("challenge-image");
+                img.src = API + "/auth/challenge?t=" + Date.now();
+                img.style.display = "";
+                document.getElementById("resend-code-btn").style.display = "none";
+                // Hide the solution form for errors (not actionable)
+                document.getElementById("challenge-form").style.display = "none";
             } else {
                 challengeCard.style.display = "none";
+                document.getElementById("challenge-form").style.display = "";
             }
 
             // Credential status
@@ -451,9 +463,27 @@
         }
     }
 
+    // --- Debug screenshots ---
+
+    function loadDebugScreenshots() {
+        var img = document.getElementById("debug-login-screenshot");
+        img.src = API + "/debug/screenshot/login_page?t=" + Date.now();
+        img.onclick = function () { window.open(img.src, "_blank"); };
+
+        var img2 = document.getElementById("debug-login-failed-screenshot");
+        img2.src = API + "/debug/screenshot/login_failed?t=" + Date.now();
+        img2.onclick = function () { window.open(img2.src, "_blank"); };
+    }
+
+    document.getElementById("refresh-debug-btn").addEventListener("click", function () {
+        loadDebugScreenshots();
+        showToast("Debug screenshots refreshed", "info");
+    });
+
     // Initial load
     pollStatus();
     loadCameras();
+    loadDebugScreenshots();
 
     // Poll status every 5 seconds, cameras every 30 seconds
     setInterval(pollStatus, 5000);

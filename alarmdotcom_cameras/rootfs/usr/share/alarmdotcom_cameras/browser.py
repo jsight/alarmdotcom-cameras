@@ -270,15 +270,38 @@ class BrowserEngine:
             except Exception:
                 pass
 
-            # Click login
+            # Click login — use JavaScript click to bypass any overlaying elements
+            # (cookie banners, fixed headers/footers) that intercept pointer events
             login_button = await page.wait_for_selector(
                 SELECTORS["login_button"], timeout=5_000
             )
-            await login_button.click(force=True)
+            await login_button.evaluate("el => el.click()")
+            logger.debug("Clicked login button via JavaScript")
 
             # Wait for navigation
-            await page.wait_for_load_state("networkidle", timeout=30_000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=30_000)
+            except Exception:
+                logger.debug("networkidle timeout after login click, continuing")
             logger.debug("Post-login URL: %s", page.url)
+
+            # If still on login page, try submitting the form directly
+            if "/login" in page.url.lower():
+                logger.warning(
+                    "Still on login page after click, trying form.submit()"
+                )
+                await page.evaluate("""
+                    () => {
+                        const form = document.getElementById('aspnetForm')
+                            || document.querySelector('form');
+                        if (form) form.submit();
+                    }
+                """)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=30_000)
+                except Exception:
+                    pass
+                logger.debug("Post-form-submit URL: %s", page.url)
 
             # Check result
             if await self._detect_captcha(page):
@@ -300,16 +323,35 @@ class BrowserEngine:
             # Unknown state - take a screenshot for debugging
             screenshot = await page.screenshot(full_page=True)
             self.state.challenge_screenshot = screenshot
+            # Also save to debug directory for the Status tab
+            try:
+                debug_dir = pathlib.Path(self._data_dir) / "debug"
+                debug_dir.mkdir(exist_ok=True)
+                (debug_dir / "login_failed.png").write_bytes(screenshot)
+            except Exception:
+                pass
             self.state.auth_status = AuthStatus.ERROR
             current_url = page.url
+            # Dump the page content for debugging
+            try:
+                page_text = await page.evaluate(
+                    "() => document.body ? document.body.innerText.substring(0, 2000) : ''"
+                )
+                logger.debug("Login failed page text:\n%s", page_text)
+            except Exception:
+                pass
             if "/login" in current_url.lower():
                 self.state.auth_message = (
                     "Login failed - still on login page. "
-                    "Check credentials or dismiss any popups."
+                    "Check credentials or dismiss any popups. "
+                    "See debug screenshot in Status tab."
                 )
                 logger.warning("Login failed - still on login page: %s", current_url)
             else:
-                self.state.auth_message = "Login failed - unexpected page state"
+                self.state.auth_message = (
+                    "Login failed - unexpected page state. "
+                    "See debug screenshot in Status tab."
+                )
                 logger.warning(
                     "Login resulted in unexpected page state: %s", current_url
                 )
@@ -354,8 +396,10 @@ class BrowserEngine:
                 await accept_btn.click(force=True)
                 logger.info("Dismissed cookie consent banner")
                 await asyncio.sleep(1)
-        except Exception:
-            pass
+            else:
+                logger.debug("No cookie consent banner found")
+        except Exception as exc:
+            logger.debug("Cookie banner dismissal error: %s", exc)
 
     async def _detect_captcha(self, page: Page) -> bool:
         """Detect if a CAPTCHA challenge is present."""

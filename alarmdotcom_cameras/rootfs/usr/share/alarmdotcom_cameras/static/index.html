@@ -130,6 +130,25 @@
                 <dd id="status-stream">--</dd>
             </dl>
         </div>
+        <div class="card">
+            <h2>Debug Screenshots</h2>
+            <p class="note">Screenshots from the headless browser for debugging login issues.</p>
+            <div class="debug-screenshots">
+                <div>
+                    <h3>Login Page (on load)</h3>
+                    <img id="debug-login-screenshot" alt="Login page screenshot"
+                         style="max-width:100%;border:1px solid #444;cursor:pointer;"
+                         onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
+                </div>
+                <div style="margin-top:1rem;">
+                    <h3>Login Result (after submit)</h3>
+                    <img id="debug-login-failed-screenshot" alt="Login result screenshot"
+                         style="max-width:100%;border:1px solid #444;cursor:pointer;"
+                         onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
+                </div>
+                <button type="button" class="btn-small" id="refresh-debug-btn" style="margin-top:0.5rem;">Refresh Screenshots</button>
+            </div>
+        </div>
     </section>
 
     <div id="toast-container"></div>
