@@ -358,8 +358,11 @@ async def index(request: web.Request) -> web.Response:
 
 def setup_routes(app: web.Application) -> None:
     """Register all HTTP routes."""
-    # Web UI
+    # Web UI — register extra slash patterns as safety net for HA Ingress
     app.router.add_get("/", index)
+    app.router.add_get("//", index)
+    app.router.add_get("///", index)
+    app.router.add_get("////", index)
     app.router.add_static("/static", STATIC_DIR, name="static")
 
     # Health

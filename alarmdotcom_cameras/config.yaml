@@ -1,5 +1,5 @@
 name: Alarm.com Cameras
-version: "0.1.1"
+version: "0.1.2"
 slug: alarmdotcom_cameras
 description: "View Alarm.com camera snapshots and live streams via a headless browser."
 image: "ghcr.io/jsight/alarmdotcom-cameras-{arch}"
@@ -14,7 +14,6 @@ init: false
 # Ingress (web UI in HA sidebar)
 ingress: true
 ingress_port: 8099
-ingress_entry: "/"
 ingress_stream: true
 panel_icon: "mdi:cctv"
 panel_title: "Alarm.com Cameras"

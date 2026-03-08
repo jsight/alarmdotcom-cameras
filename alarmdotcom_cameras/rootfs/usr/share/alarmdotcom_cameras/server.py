@@ -226,21 +226,8 @@ async def on_shutdown(app: web.Application) -> None:
         await browser.stop()
 
 
-@web.middleware
-async def normalize_path_middleware(request, handler):
-    """Collapse multiple slashes in path (HA Ingress sends ////)."""
-    import re
-
-    normalized = re.sub(r"/+", "/", request.path)
-    if normalized != request.path:
-        raise web.HTTPTemporaryRedirect(
-            normalized + ("?" + request.query_string if request.query_string else "")
-        )
-    return await handler(request)
-
-
 def create_app(args: argparse.Namespace) -> web.Application:
-    app = web.Application(middlewares=[normalize_path_middleware])
+    app = web.Application()
 
     app["config"] = {
         "snapshot_interval": args.snapshot_interval,
