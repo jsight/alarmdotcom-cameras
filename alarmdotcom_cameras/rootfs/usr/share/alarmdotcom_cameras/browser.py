@@ -271,7 +271,7 @@ class BrowserEngine:
             login_button = await page.wait_for_selector(
                 SELECTORS["login_button"], timeout=5_000
             )
-            await login_button.click()
+            await login_button.click(force=True)
 
             # Wait for navigation
             await page.wait_for_load_state("networkidle", timeout=30_000)
@@ -439,7 +439,7 @@ class BrowserEngine:
                 )
 
             if name_input:
-                await name_input.click()
+                await name_input.click(force=True)
                 await name_input.evaluate('el => el.value = ""')
                 await name_input.fill("")
                 await name_input.type(self._trusted_device_name, delay=30)
@@ -453,13 +453,13 @@ class BrowserEngine:
             # Click "Trust Device" button
             trust_btn = await page.query_selector(SELECTORS["trust_device_submit"])
             if trust_btn:
-                await trust_btn.click()
+                await trust_btn.click(force=True)
                 logger.info("Clicked Trust Device button")
             else:
                 logger.warning("Trust Device button not found, trying Skip")
                 skip_btn = await page.query_selector(SELECTORS["trust_device_skip"])
                 if skip_btn:
-                    await skip_btn.click()
+                    await skip_btn.click(force=True)
                     logger.info("Clicked Skip button on trust page")
 
             # Wait for the SPA to process and redirect
@@ -555,7 +555,7 @@ class BrowserEngine:
                     await inputs[0].fill(solution)
                     submit = await page.query_selector(SELECTORS["login_button"])
                     if submit:
-                        await submit.click()
+                        await submit.click(force=True)
 
             elif self.state.auth_status == AuthStatus.TWO_FA_REQUIRED:
                 # Debug: dump all inputs on the 2FA page
@@ -586,7 +586,7 @@ class BrowserEngine:
 
                 # Use click + type (real keystrokes) instead of fill() so that
                 # Ember.js data-binding picks up the value properly.
-                await twofa_input.click()
+                await twofa_input.click(force=True)
                 await twofa_input.fill("")  # clear any existing value
                 await twofa_input.type(solution, delay=50)
 
@@ -596,7 +596,7 @@ class BrowserEngine:
                 # Re-query the submit button fresh (Ember may have re-rendered)
                 submit = await page.query_selector(SELECTORS["twofa_submit"])
                 if submit:
-                    await submit.click()
+                    await submit.click(force=True)
                     logger.info("Clicked 2FA submit button")
 
             # Wait for the SPA to process the submission.
@@ -688,7 +688,7 @@ class BrowserEngine:
                     "error": "Could not find resend link on the page",
                 }
 
-            await resend_elem.click()
+            await resend_elem.click(force=True)
             logger.info("Clicked 2FA resend code button")
 
             # Wait for the SPA to process the resend and re-render
@@ -747,7 +747,7 @@ class BrowserEngine:
             # Instead, click the nav text to trigger Ember's routing.
             video_nav = await page.query_selector('a:has-text("Video")')
             if video_nav:
-                await video_nav.click()
+                await video_nav.click(force=True)
                 logger.debug("Clicked Video nav link")
                 # Wait for the SPA route to transition
                 try:
@@ -1094,7 +1094,7 @@ class BrowserEngine:
         # Otherwise, navigate via SPA - click Video in the nav
         video_nav = await page.query_selector('a:has-text("Video")')
         if video_nav:
-            await video_nav.click()
+            await video_nav.click(force=True)
             try:
                 await page.wait_for_url("**/video**", timeout=10_000)
             except Exception:
