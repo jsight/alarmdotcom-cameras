@@ -270,38 +270,55 @@ class BrowserEngine:
             except Exception:
                 pass
 
-            # Click login — use JavaScript click to bypass any overlaying elements
-            # (cookie banners, fixed headers/footers) that intercept pointer events
+            # Submit login form.
+            # Strategy: try el.click() first, fall back to form.submit().
+            # Both can trigger a page navigation that destroys the JS context,
+            # so we handle that error as a success signal.
             login_button = await page.wait_for_selector(
                 SELECTORS["login_button"], timeout=5_000
             )
-            await login_button.evaluate("el => el.click()")
-            logger.debug("Clicked login button via JavaScript")
 
-            # Wait for navigation
+            submitted = False
+            # Attempt 1: JavaScript click on the submit button
             try:
+                await login_button.evaluate("el => el.click()")
+                logger.debug("Clicked login button via JavaScript")
                 await page.wait_for_load_state("networkidle", timeout=30_000)
-            except Exception:
-                logger.debug("networkidle timeout after login click, continuing")
-            logger.debug("Post-login URL: %s", page.url)
+            except Exception as exc:
+                if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                    logger.debug("Login click triggered navigation (good)")
+                    submitted = True
+                else:
+                    logger.debug("Login click error: %s", exc)
 
-            # If still on login page, try submitting the form directly
-            if "/login" in page.url.lower():
-                logger.warning(
-                    "Still on login page after click, trying form.submit()"
-                )
-                await page.evaluate("""
-                    () => {
-                        const form = document.getElementById('aspnetForm')
-                            || document.querySelector('form');
-                        if (form) form.submit();
-                    }
-                """)
+            logger.debug("Post-click URL: %s", page.url)
+
+            # Attempt 2: direct form.submit() if click didn't navigate
+            if not submitted and "/login" in page.url.lower():
+                logger.info("Still on login page after click, trying form.submit()")
                 try:
+                    await page.evaluate("""
+                        () => {
+                            const form = document.getElementById('aspnetForm')
+                                || document.querySelector('form');
+                            if (form) form.submit();
+                        }
+                    """)
                     await page.wait_for_load_state("networkidle", timeout=30_000)
-                except Exception:
-                    pass
-                logger.debug("Post-form-submit URL: %s", page.url)
+                except Exception as exc:
+                    if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                        logger.debug("form.submit() triggered navigation (good)")
+                        submitted = True
+                    else:
+                        logger.debug("form.submit() error: %s", exc)
+
+            # Wait for the destination page to finish loading
+            try:
+                await page.wait_for_load_state("load", timeout=15_000)
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:
+                pass
+            logger.debug("Post-login URL: %s", page.url)
 
             # Check result
             if await self._detect_captcha(page):
