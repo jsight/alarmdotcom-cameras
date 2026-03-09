@@ -22,6 +22,16 @@ ALARM_BASE_URL = "https://www.alarm.com"
 LOGIN_URL = f"{ALARM_BASE_URL}/login"
 CAMERAS_URL = f"{ALARM_BASE_URL}/web/video"
 
+
+def _is_login_page(url: str) -> bool:
+    """Check if URL is the alarm.com login page (not other pages with 'login' in path)."""
+    # The login page URL is exactly /login or /login?... (with query params)
+    # The 2FA page is /web/system-install/login-setup/... which should NOT match
+    from urllib.parse import urlparse
+
+    path = urlparse(url).path.rstrip("/").lower()
+    return path == "/login"
+
 # Selectors for alarm.com pages (may need adjustment based on actual DOM)
 SELECTORS = {
     # Login page
@@ -294,7 +304,7 @@ class BrowserEngine:
             logger.debug("Post-click URL: %s", page.url)
 
             # Attempt 2: direct form.submit() if click didn't navigate
-            if not submitted and "/login" in page.url.lower():
+            if not submitted and _is_login_page(page.url):
                 logger.info("Still on login page after click, trying form.submit()")
                 try:
                     await page.evaluate("""
@@ -357,7 +367,7 @@ class BrowserEngine:
                 logger.debug("Login failed page text:\n%s", page_text)
             except Exception:
                 pass
-            if "/login" in current_url.lower():
+            if _is_login_page(current_url):
                 self.state.auth_message = (
                     "Login failed - still on login page. "
                     "Check credentials or dismiss any popups. "
@@ -384,7 +394,7 @@ class BrowserEngine:
         """Check if we're on a logged-in page."""
         # Check URL - if we're past /login, we're probably authenticated
         url = page.url
-        if "/login" not in url.lower() and ALARM_BASE_URL in url:
+        if not _is_login_page(url) and ALARM_BASE_URL in url:
             # Double-check by looking for a dashboard/video element
             try:
                 await page.wait_for_selector(
@@ -394,7 +404,7 @@ class BrowserEngine:
             except Exception:
                 # URL changed but no indicator found - still might be logged in
                 # if we're on a page that's not the login page
-                return "/login" not in url.lower()
+                return not _is_login_page(url)
         return False
 
     async def _dismiss_cookie_banner(self, page: Page) -> None:
@@ -429,9 +439,8 @@ class BrowserEngine:
     async def _detect_2fa(self, page: Page) -> bool:
         """Detect if a 2FA prompt is present."""
         try:
-            # Don't detect 2FA if we're still on the login page
-            url = page.url.lower()
-            if "/login" in url:
+            # Don't detect 2FA if we're still on the exact login page
+            if _is_login_page(page.url):
                 logger.debug("Still on login page, skipping 2FA detection")
                 return False
             element = await page.query_selector(SELECTORS["twofa_element"])
@@ -604,7 +613,7 @@ class BrowserEngine:
 
             # Check if we're now logged in
             final_url = page.url
-            if "/login" not in final_url.lower() and ALARM_BASE_URL in final_url:
+            if not _is_login_page(final_url) and ALARM_BASE_URL in final_url:
                 self.state.auth_status = AuthStatus.AUTHENTICATED
                 self.state.auth_message = "Successfully authenticated (device trusted)"
                 self.state.challenge_screenshot = None
@@ -1435,7 +1444,7 @@ class BrowserEngine:
             page = await self._get_page()
             await page.goto(f"{ALARM_BASE_URL}/web/system/home", timeout=15_000)
             url = page.url
-            if "/login" in url.lower():
+            if _is_login_page(url):
                 self.state.auth_status = AuthStatus.LOGGED_OUT
                 self.state.auth_message = "Session expired"
                 return False
