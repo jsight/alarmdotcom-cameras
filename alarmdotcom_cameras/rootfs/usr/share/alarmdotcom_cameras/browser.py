@@ -212,6 +212,94 @@ class BrowserEngine:
             await self._page.close()
         self._page = None
 
+    # ---- Debug Helpers ----
+
+    _debug_counter = 0
+
+    async def _debug_page_state(self, page: Page, label: str) -> None:
+        """Log comprehensive page state and save a numbered screenshot.
+
+        Call this at every major step to build a visual timeline of what
+        the browser is doing.  Screenshots are saved as debug/step_NNN_<label>.png.
+        """
+        BrowserEngine._debug_counter += 1
+        n = BrowserEngine._debug_counter
+        tag = f"[STEP {n:03d} {label}]"
+
+        try:
+            url = page.url
+            logger.info("%s URL: %s", tag, url)
+        except Exception:
+            logger.warning("%s could not read URL (page may be closed)", tag)
+            return
+
+        # Save screenshot
+        try:
+            debug_dir = pathlib.Path(self._data_dir) / "debug"
+            debug_dir.mkdir(exist_ok=True)
+            safe_label = label.replace(" ", "_").replace("/", "_")[:40]
+            filename = f"step_{n:03d}_{safe_label}.png"
+            await page.screenshot(path=str(debug_dir / filename), full_page=True)
+            logger.info("%s screenshot saved: %s", tag, filename)
+        except Exception as exc:
+            logger.debug("%s screenshot failed: %s", tag, exc)
+
+        # Dump visible text (first 1500 chars)
+        try:
+            page_text = await page.evaluate(
+                "() => document.body ? document.body.innerText.substring(0, 1500) : '<no body>'"
+            )
+            logger.info("%s page text:\n%s", tag, page_text)
+        except Exception as exc:
+            logger.debug("%s page text failed: %s", tag, exc)
+
+        # Dump key DOM elements: forms, inputs, buttons
+        try:
+            dom_info = await page.evaluate("""
+                () => {
+                    const parts = [];
+                    // Forms
+                    const forms = document.querySelectorAll('form');
+                    parts.push('FORMS (' + forms.length + '):');
+                    forms.forEach((f, i) => {
+                        parts.push('  form[' + i + '] id=' + f.id + ' action=' + f.action + ' method=' + f.method);
+                    });
+                    // Inputs
+                    const inputs = document.querySelectorAll('input, textarea, select');
+                    parts.push('INPUTS (' + inputs.length + '):');
+                    Array.from(inputs).slice(0, 20).forEach(e => {
+                        parts.push('  <' + e.tagName + ' id="' + e.id + '" type="' + e.type +
+                            '" name="' + e.name + '" placeholder="' + (e.placeholder||'') +
+                            '" value="' + (e.type === 'password' ? '***' : (e.value||'').substring(0, 30)) + '">');
+                    });
+                    // Buttons
+                    const buttons = document.querySelectorAll('button, input[type="submit"]');
+                    parts.push('BUTTONS (' + buttons.length + '):');
+                    Array.from(buttons).slice(0, 15).forEach(e => {
+                        parts.push('  <' + e.tagName + ' id="' + e.id + '" class="' +
+                            (e.className||'').toString().substring(0, 60) + '" disabled=' + e.disabled +
+                            '>' + (e.textContent||e.value||'').trim().substring(0, 50));
+                    });
+                    // Key elements
+                    const indicators = document.querySelectorAll(
+                        '[class*="error"], [class*="alert"], [class*="success"], ' +
+                        '[class*="dashboard"], [class*="camera"], [class*="video"]'
+                    );
+                    if (indicators.length) {
+                        parts.push('KEY ELEMENTS (' + indicators.length + '):');
+                        Array.from(indicators).slice(0, 10).forEach(e => {
+                            parts.push('  <' + e.tagName + ' class="' +
+                                (e.className||'').toString().substring(0, 80) + '">' +
+                                (e.textContent||'').trim().substring(0, 80));
+                        });
+                    }
+                    return parts.join('\\n');
+                }
+            """)
+            logger.info("%s DOM dump:\n%s", tag, dom_info)
+        except Exception as exc:
+            logger.debug("%s DOM dump failed: %s", tag, exc)
+
     # ---- Authentication ----
 
     async def login(self, username: str, password: str) -> AuthStatus:
@@ -223,6 +311,7 @@ class BrowserEngine:
         try:
             page = await self._get_page()
             await page.goto(LOGIN_URL, wait_until="networkidle", timeout=30_000)
+            await self._debug_page_state(page, "login_page_loaded")
 
             # Check if already logged in (session restored from persistent context)
             if await self._check_logged_in(page):
@@ -301,7 +390,7 @@ class BrowserEngine:
                 else:
                     logger.debug("Login click error: %s", exc)
 
-            logger.debug("Post-click URL: %s", page.url)
+            await self._debug_page_state(page, "after_login_click")
 
             # Attempt 2: direct form.submit() if click didn't navigate
             if not submitted and _is_login_page(page.url):
@@ -328,7 +417,7 @@ class BrowserEngine:
                 await page.wait_for_load_state("networkidle", timeout=15_000)
             except Exception:
                 pass
-            logger.debug("Post-login URL: %s", page.url)
+            await self._debug_page_state(page, "post_login_settled")
 
             # Check result
             if await self._detect_captcha(page):
@@ -391,22 +480,35 @@ class BrowserEngine:
             return AuthStatus.ERROR
 
     async def _check_logged_in(self, page: Page) -> bool:
-        """Check if we're on a logged-in page (customer portal, not public site)."""
+        """Check if we're on a logged-in page (customer portal, not public site).
+
+        Auth flow pages under /web/system-install/ are NOT considered logged in.
+        Only actual customer portal pages (/web/video, /web/dashboard, etc.) count.
+        """
         url = page.url
         logger.debug("_check_logged_in: URL=%s", url)
 
         if _is_login_page(url) or ALARM_BASE_URL not in url:
             return False
 
-        # The customer portal pages are under /web/... paths
-        # The public site is at / or /for-home, /home-security, etc.
         from urllib.parse import urlparse
 
         path = urlparse(url).path.lower()
 
-        # If on a /web/ path, we're in the customer portal
+        # Auth flow pages (2FA, trust device, login-setup) are NOT logged in
+        auth_flow_prefixes = (
+            "/web/system-install/",
+            "/web/two-factor",
+            "/web/login",
+        )
+        if any(path.startswith(prefix) for prefix in auth_flow_prefixes):
+            logger.debug(
+                "_check_logged_in: on auth flow path %s, NOT logged in", path
+            )
+            return False
+
+        # If on a /web/ path (but not auth flow), check for dashboard indicators
         if path.startswith("/web/"):
-            # Double-check by looking for dashboard indicators
             try:
                 await page.wait_for_selector(
                     SELECTORS["logged_in_indicator"], timeout=3_000
@@ -414,13 +516,24 @@ class BrowserEngine:
                 logger.debug("_check_logged_in: found indicator on %s", path)
                 return True
             except Exception:
-                # On /web/ path but no indicator - still likely logged in
-                # (could be on settings, 2FA setup, etc.)
-                logger.debug("_check_logged_in: on /web/ path %s, assuming logged in", path)
-                return True
+                # On /web/ path with no indicator — likely still loading or
+                # on a non-dashboard page. Check page text for confirmation.
+                try:
+                    page_text = await page.evaluate(
+                        "() => document.body ? document.body.innerText.substring(0, 500) : ''"
+                    )
+                    # If page has logout/sign-out links, we're likely logged in
+                    if any(kw in page_text.lower() for kw in ("log out", "sign out", "dashboard")):
+                        logger.debug("_check_logged_in: found auth keywords on %s", path)
+                        return True
+                except Exception:
+                    pass
+                logger.debug(
+                    "_check_logged_in: on /web/ path %s but no indicators found", path
+                )
+                return False
 
         # Not on /web/ path and not on /login - likely public site
-        # Try checking for a logged-in indicator anyway
         try:
             await page.wait_for_selector(
                 SELECTORS["logged_in_indicator"], timeout=3_000
@@ -621,11 +734,10 @@ class BrowserEngine:
                     break
 
             # After trusting, alarm.com may redirect to dashboard or another page.
-            # Navigate explicitly to the main page to verify auth.
-            current_url = page.url
-            logger.debug("Post-trust URL: %s", current_url)
+            await self._debug_page_state(page, "post_trust_device")
 
             # If still on the 2FA flow page, try navigating to the dashboard
+            current_url = page.url
             if "two-factor" in current_url or "login-setup" in current_url:
                 logger.info("Still on 2FA flow page, navigating to dashboard...")
                 await page.goto(
@@ -680,6 +792,7 @@ class BrowserEngine:
                         await submit.click(force=True)
 
             elif self.state.auth_status == AuthStatus.TWO_FA_REQUIRED:
+                await self._debug_page_state(page, "2fa_before_input")
                 # Debug: dump all inputs on the 2FA page
                 try:
                     inputs_html = await page.evaluate("""
@@ -714,21 +827,71 @@ class BrowserEngine:
 
                 # Brief pause to let Ember process the input
                 await asyncio.sleep(0.5)
+                await self._debug_page_state(page, "2fa_code_entered")
 
                 # Re-query the submit button fresh (Ember may have re-rendered)
                 submit = await page.query_selector(SELECTORS["twofa_submit"])
+                submitted_2fa = False
+
                 if submit:
-                    # Use JavaScript click + handle navigation-destroyed context
+                    # Attempt 1: JavaScript click on the submit button
                     try:
                         await submit.evaluate("el => el.click()")
                         logger.info("Clicked 2FA submit button via JavaScript")
                     except Exception as exc:
                         if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
-                            logger.debug("2FA submit triggered navigation (good)")
+                            logger.debug("2FA click triggered navigation (good)")
+                            submitted_2fa = True
                         else:
                             logger.warning("2FA submit click error: %s", exc)
+
+                    # Attempt 2: Playwright click (dispatches real pointer events)
+                    if not submitted_2fa:
+                        await asyncio.sleep(2)
+                        pre_text = ""
+                        try:
+                            pre_text = await page.evaluate(
+                                "() => document.body ? document.body.innerText.substring(0, 500) : ''"
+                            )
+                        except Exception:
+                            pass
+
+                        try:
+                            submit = await page.query_selector(SELECTORS["twofa_submit"])
+                            if submit:
+                                await submit.click(force=True)
+                                logger.info("Clicked 2FA submit via Playwright click(force=True)")
+                        except Exception as exc:
+                            if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                                logger.debug("2FA Playwright click triggered navigation (good)")
+                                submitted_2fa = True
+                            else:
+                                logger.warning("2FA Playwright click error: %s", exc)
+
+                    # Attempt 3: form.submit() fallback (like login form)
+                    if not submitted_2fa:
+                        await asyncio.sleep(2)
+                        try:
+                            post_text = await page.evaluate(
+                                "() => document.body ? document.body.innerText.substring(0, 500) : ''"
+                            )
+                            if post_text == pre_text:
+                                logger.info("Page unchanged after clicks, trying form.submit()")
+                                await page.evaluate("""
+                                    () => {
+                                        const form = document.querySelector('form');
+                                        if (form) form.submit();
+                                    }
+                                """)
+                                logger.info("Submitted 2FA form via form.submit()")
+                        except Exception as exc:
+                            if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                                logger.debug("2FA form.submit() triggered navigation (good)")
+                                submitted_2fa = True
+                            else:
+                                logger.warning("2FA form.submit() error: %s", exc)
                 else:
-                    # Try form submit as fallback
+                    # No submit button found at all - try form.submit()
                     logger.warning("No 2FA submit button found, trying form.submit()")
                     try:
                         await page.evaluate("() => { const f = document.querySelector('form'); if (f) f.submit(); }")
@@ -750,34 +913,21 @@ class BrowserEngine:
 
             # Give the SPA time to process and transition
             pre_url = page.url
-            for _ in range(15):
+            for i in range(15):
                 await asyncio.sleep(1)
                 current = page.url
                 if current != pre_url:
-                    logger.debug("URL changed: %s -> %s", pre_url, current)
+                    logger.info("URL changed after %ds: %s -> %s", i + 1, pre_url, current)
                     try:
                         await page.wait_for_load_state("networkidle", timeout=10_000)
                     except Exception:
                         pass
                     break
+                if i % 5 == 4:
+                    # Log progress every 5 seconds during wait
+                    logger.info("Still waiting for URL change (%ds), current: %s", i + 1, current)
 
-            logger.info("Post-challenge URL: %s (was: %s)", page.url, pre_url)
-
-            # Save debug screenshot of post-challenge state
-            try:
-                debug_dir = pathlib.Path(self._data_dir) / "debug"
-                debug_dir.mkdir(exist_ok=True)
-                screenshot = await page.screenshot(full_page=True)
-                (debug_dir / "post_challenge.png").write_bytes(screenshot)
-                logger.debug("Saved post-challenge screenshot")
-
-                # Log the page text for debugging
-                page_text = await page.evaluate(
-                    "() => document.body ? document.body.innerText.substring(0, 2000) : ''"
-                )
-                logger.info("Post-challenge page text:\n%s", page_text[:1000])
-            except Exception:
-                pass
+            await self._debug_page_state(page, "post_challenge_settled")
 
             # Check for trust device page FIRST (shown after successful 2FA)
             if await self._detect_trust_device(page):
@@ -800,6 +950,7 @@ class BrowserEngine:
                 logger.info("On /web/ path after challenge, navigating to dashboard")
                 try:
                     await page.goto(CAMERAS_URL, wait_until="networkidle", timeout=30_000)
+                    await self._debug_page_state(page, "navigated_to_dashboard")
                     if await self._check_logged_in(page):
                         self.state.auth_status = AuthStatus.AUTHENTICATED
                         self.state.auth_message = "Successfully authenticated"
