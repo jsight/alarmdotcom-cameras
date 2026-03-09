@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Alarm.com Cameras</title>
-    <link rel="stylesheet" href="static/style.css?v=0.1.7">
+    <link rel="stylesheet" href="static/style.css?v=0.1.8">
 </head>
 <body>
     <header>
@@ -146,6 +146,12 @@
                          style="max-width:100%;border:1px solid #444;cursor:pointer;"
                          onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
                 </div>
+                <div style="margin-top:1rem;">
+                    <h3>Post-Challenge (after 2FA/CAPTCHA)</h3>
+                    <img id="debug-post-challenge-screenshot" alt="Post-challenge screenshot"
+                         style="max-width:100%;border:1px solid #444;cursor:pointer;"
+                         onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
+                </div>
                 <button type="button" class="btn-small" id="refresh-debug-btn" style="margin-top:0.5rem;">Refresh Screenshots</button>
             </div>
         </div>
@@ -153,6 +159,6 @@
 
     <div id="toast-container"></div>
 
-    <script src="static/app.js?v=0.1.7"></script>
+    <script src="static/app.js?v=0.1.8"></script>
 </body>
 </html>

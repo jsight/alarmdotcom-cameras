@@ -350,7 +350,14 @@ async def index(request: web.Request) -> web.Response:
     index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
         return web.Response(text="Web UI not found", status=500)
-    return web.FileResponse(index_path)
+    return web.FileResponse(
+        index_path,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 # ---- Route setup ----

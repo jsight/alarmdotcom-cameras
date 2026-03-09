@@ -473,6 +473,10 @@
         var img2 = document.getElementById("debug-login-failed-screenshot");
         img2.src = API + "/debug/screenshot/login_failed?t=" + Date.now();
         img2.onclick = function () { window.open(img2.src, "_blank"); };
+
+        var img3 = document.getElementById("debug-post-challenge-screenshot");
+        img3.src = API + "/debug/screenshot/post_challenge?t=" + Date.now();
+        img3.onclick = function () { window.open(img3.src, "_blank"); };
     }
 
     document.getElementById("refresh-debug-btn").addEventListener("click", function () {

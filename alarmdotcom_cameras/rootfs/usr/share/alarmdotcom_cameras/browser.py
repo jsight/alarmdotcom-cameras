@@ -391,21 +391,44 @@ class BrowserEngine:
             return AuthStatus.ERROR
 
     async def _check_logged_in(self, page: Page) -> bool:
-        """Check if we're on a logged-in page."""
-        # Check URL - if we're past /login, we're probably authenticated
+        """Check if we're on a logged-in page (customer portal, not public site)."""
         url = page.url
-        if not _is_login_page(url) and ALARM_BASE_URL in url:
-            # Double-check by looking for a dashboard/video element
+        logger.debug("_check_logged_in: URL=%s", url)
+
+        if _is_login_page(url) or ALARM_BASE_URL not in url:
+            return False
+
+        # The customer portal pages are under /web/... paths
+        # The public site is at / or /for-home, /home-security, etc.
+        from urllib.parse import urlparse
+
+        path = urlparse(url).path.lower()
+
+        # If on a /web/ path, we're in the customer portal
+        if path.startswith("/web/"):
+            # Double-check by looking for dashboard indicators
             try:
                 await page.wait_for_selector(
                     SELECTORS["logged_in_indicator"], timeout=3_000
                 )
+                logger.debug("_check_logged_in: found indicator on %s", path)
                 return True
             except Exception:
-                # URL changed but no indicator found - still might be logged in
-                # if we're on a page that's not the login page
-                return not _is_login_page(url)
-        return False
+                # On /web/ path but no indicator - still likely logged in
+                # (could be on settings, 2FA setup, etc.)
+                logger.debug("_check_logged_in: on /web/ path %s, assuming logged in", path)
+                return True
+
+        # Not on /web/ path and not on /login - likely public site
+        # Try checking for a logged-in indicator anyway
+        try:
+            await page.wait_for_selector(
+                SELECTORS["logged_in_indicator"], timeout=3_000
+            )
+            return True
+        except Exception:
+            logger.debug("_check_logged_in: not on /web/ path and no indicator, NOT logged in")
+            return False
 
     async def _dismiss_cookie_banner(self, page: Page) -> None:
         """Dismiss cookie consent banner if present on alarm.com."""
@@ -612,15 +635,6 @@ class BrowserEngine:
                 )
 
             # Check if we're now logged in
-            final_url = page.url
-            if not _is_login_page(final_url) and ALARM_BASE_URL in final_url:
-                self.state.auth_status = AuthStatus.AUTHENTICATED
-                self.state.auth_message = "Successfully authenticated (device trusted)"
-                self.state.challenge_screenshot = None
-                self.state.last_auth_time = time.time()
-                logger.info("Device trusted, now authenticated (URL: %s)", final_url)
-                return AuthStatus.AUTHENTICATED
-
             if await self._check_logged_in(page):
                 self.state.auth_status = AuthStatus.AUTHENTICATED
                 self.state.auth_message = "Successfully authenticated (device trusted)"
@@ -704,50 +718,97 @@ class BrowserEngine:
                 # Re-query the submit button fresh (Ember may have re-rendered)
                 submit = await page.query_selector(SELECTORS["twofa_submit"])
                 if submit:
-                    await submit.click(force=True)
-                    logger.info("Clicked 2FA submit button")
+                    # Use JavaScript click + handle navigation-destroyed context
+                    try:
+                        await submit.evaluate("el => el.click()")
+                        logger.info("Clicked 2FA submit button via JavaScript")
+                    except Exception as exc:
+                        if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                            logger.debug("2FA submit triggered navigation (good)")
+                        else:
+                            logger.warning("2FA submit click error: %s", exc)
+                else:
+                    # Try form submit as fallback
+                    logger.warning("No 2FA submit button found, trying form.submit()")
+                    try:
+                        await page.evaluate("() => { const f = document.querySelector('form'); if (f) f.submit(); }")
+                    except Exception as exc:
+                        if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                            logger.debug("2FA form.submit() triggered navigation (good)")
+                        else:
+                            logger.warning("2FA form.submit() error: %s", exc)
 
-            # Wait for the SPA to process the submission.
-            # alarm.com is an Ember.js app so there's no full page navigation;
-            # networkidle fires almost instantly.  Instead, wait for either a
-            # URL change (success → redirect) or for the submit button to
-            # become enabled again (failure → same page).
-            await page.wait_for_load_state("networkidle", timeout=30_000)
+            # Wait for the page to settle after submission
+            try:
+                await page.wait_for_load_state("load", timeout=15_000)
+            except Exception:
+                pass
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:
+                pass
 
             # Give the SPA time to process and transition
             pre_url = page.url
-            for _ in range(10):
+            for _ in range(15):
                 await asyncio.sleep(1)
-                if page.url != pre_url:
-                    # URL changed — likely authenticated, wait for it to settle
-                    await page.wait_for_load_state("networkidle", timeout=15_000)
-                    break
-                # Check if the submit button is re-enabled (SPA finished processing)
-                try:
-                    btn_disabled = await page.evaluate("""
-                        () => {
-                            const btn = document.querySelector('button:has-text("Verify"), button.btn-color-primary');
-                            return btn ? btn.classList.contains('is-async') && btn.hasAttribute('disabled') : false;
-                        }
-                    """)
-                    if not btn_disabled:
-                        break
-                except Exception:
+                current = page.url
+                if current != pre_url:
+                    logger.debug("URL changed: %s -> %s", pre_url, current)
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10_000)
+                    except Exception:
+                        pass
                     break
 
-            logger.debug("Post-2FA URL: %s (was: %s)", page.url, pre_url)
+            logger.info("Post-challenge URL: %s (was: %s)", page.url, pre_url)
+
+            # Save debug screenshot of post-challenge state
+            try:
+                debug_dir = pathlib.Path(self._data_dir) / "debug"
+                debug_dir.mkdir(exist_ok=True)
+                screenshot = await page.screenshot(full_page=True)
+                (debug_dir / "post_challenge.png").write_bytes(screenshot)
+                logger.debug("Saved post-challenge screenshot")
+
+                # Log the page text for debugging
+                page_text = await page.evaluate(
+                    "() => document.body ? document.body.innerText.substring(0, 2000) : ''"
+                )
+                logger.info("Post-challenge page text:\n%s", page_text[:1000])
+            except Exception:
+                pass
+
+            # Check for trust device page FIRST (shown after successful 2FA)
+            if await self._detect_trust_device(page):
+                return await self._handle_trust_device(page)
 
             # Check if we're now logged in
             if await self._check_logged_in(page):
                 self.state.auth_status = AuthStatus.AUTHENTICATED
                 self.state.auth_message = "Successfully authenticated"
                 self.state.challenge_screenshot = None
+                self.state.last_auth_time = time.time()
                 logger.info("Challenge solved, now authenticated")
                 return AuthStatus.AUTHENTICATED
 
-            # Check for trust device page (shown after successful 2FA)
-            if await self._detect_trust_device(page):
-                return await self._handle_trust_device(page)
+            # If we're on a /web/ path but not detected as logged in,
+            # try navigating to the dashboard explicitly
+            from urllib.parse import urlparse
+            path = urlparse(page.url).path.lower()
+            if path.startswith("/web/"):
+                logger.info("On /web/ path after challenge, navigating to dashboard")
+                try:
+                    await page.goto(CAMERAS_URL, wait_until="networkidle", timeout=30_000)
+                    if await self._check_logged_in(page):
+                        self.state.auth_status = AuthStatus.AUTHENTICATED
+                        self.state.auth_message = "Successfully authenticated"
+                        self.state.challenge_screenshot = None
+                        self.state.last_auth_time = time.time()
+                        logger.info("Authenticated after navigating to dashboard")
+                        return AuthStatus.AUTHENTICATED
+                except Exception as exc:
+                    logger.warning("Dashboard navigation failed: %s", exc)
 
             # Still challenged?
             if await self._detect_captcha(page):
@@ -755,11 +816,20 @@ class BrowserEngine:
             if await self._detect_2fa(page):
                 return await self._handle_2fa(page)
 
-            # Unknown state
-            screenshot = await page.screenshot()
+            # Unknown state - save screenshot for debugging
+            screenshot = await page.screenshot(full_page=True)
             self.state.challenge_screenshot = screenshot
+            try:
+                debug_dir = pathlib.Path(self._data_dir) / "debug"
+                (debug_dir / "challenge_failed.png").write_bytes(screenshot)
+            except Exception:
+                pass
             self.state.auth_status = AuthStatus.ERROR
-            self.state.auth_message = "Challenge solution failed"
+            self.state.auth_message = (
+                f"Challenge solution failed. Post-challenge URL: {page.url}. "
+                "See debug screenshots in Status tab."
+            )
+            logger.warning("Challenge failed, URL: %s", page.url)
             return AuthStatus.ERROR
 
         except Exception as e:
