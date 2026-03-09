@@ -463,34 +463,109 @@
         }
     }
 
-    // --- Debug screenshots ---
+    // --- Debug live view ---
 
-    function loadDebugScreenshots() {
-        var img = document.getElementById("debug-login-screenshot");
-        img.src = API + "/debug/screenshot/login_page?t=" + Date.now();
-        img.onclick = function () { window.open(img.src, "_blank"); };
+    var debugAutoRefresh = true;
+    var debugTimer = null;
 
-        var img2 = document.getElementById("debug-login-failed-screenshot");
-        img2.src = API + "/debug/screenshot/login_failed?t=" + Date.now();
-        img2.onclick = function () { window.open(img2.src, "_blank"); };
+    async function loadDebugLive() {
+        var statusEl = document.getElementById("debug-status");
+        var urlEl = document.getElementById("debug-url");
+        var imgEl = document.getElementById("debug-live-screenshot");
+        var domEl = document.getElementById("debug-dom-content");
 
-        var img3 = document.getElementById("debug-post-challenge-screenshot");
-        img3.src = API + "/debug/screenshot/post_challenge?t=" + Date.now();
-        img3.onclick = function () { window.open(img3.src, "_blank"); };
+        statusEl.textContent = "Loading...";
+        try {
+            var resp = await apiFetch("debug/live");
+            if (!resp.ok) {
+                var err = await resp.json();
+                statusEl.textContent = "Error: " + (err.error || resp.statusText);
+                return;
+            }
+            var data = await resp.json();
+            urlEl.textContent = data.url || "--";
+            imgEl.src = "data:image/png;base64," + data.screenshot_b64;
+            imgEl.style.opacity = "1";
+            imgEl.onclick = function () {
+                var w = window.open();
+                w.document.write('<img src="' + imgEl.src + '" style="max-width:100%">');
+            };
+            domEl.textContent = data.dom_summary || "No data";
+            statusEl.textContent = "Updated: " + new Date().toLocaleTimeString() +
+                " | Title: " + (data.title || "--");
+        } catch (err) {
+            statusEl.textContent = "Connection error: " + err.message;
+        }
     }
 
-    document.getElementById("refresh-debug-btn").addEventListener("click", function () {
-        loadDebugScreenshots();
-        showToast("Debug screenshots refreshed", "info");
+    document.getElementById("debug-refresh-btn").addEventListener("click", function () {
+        loadDebugLive();
+        showToast("Debug view refreshed", "info");
+    });
+
+    document.getElementById("debug-auto-refresh").addEventListener("change", function () {
+        debugAutoRefresh = this.checked;
+        if (debugAutoRefresh) {
+            startDebugTimer();
+        } else if (debugTimer) {
+            clearInterval(debugTimer);
+            debugTimer = null;
+        }
+    });
+
+    function startDebugTimer() {
+        if (debugTimer) clearInterval(debugTimer);
+        debugTimer = setInterval(function () {
+            // Only refresh if the debug tab is visible
+            var debugTab = document.getElementById("tab-debug");
+            if (debugTab && debugTab.classList.contains("active") && debugAutoRefresh) {
+                loadDebugLive();
+            }
+        }, 30000);
+    }
+
+    // Copy button handler (delegation)
+    document.addEventListener("click", function (e) {
+        if (!e.target.classList.contains("btn-copy")) return;
+        var targetId = e.target.getAttribute("data-copy-target");
+        var targetEl = document.getElementById(targetId);
+        if (!targetEl) return;
+
+        var text = targetEl.textContent || targetEl.innerText;
+        navigator.clipboard.writeText(text).then(function () {
+            e.target.textContent = "Copied!";
+            e.target.classList.add("copied");
+            setTimeout(function () {
+                e.target.textContent = "Copy";
+                e.target.classList.remove("copied");
+            }, 2000);
+        }).catch(function () {
+            // Fallback for older browsers / no clipboard API
+            var range = document.createRange();
+            range.selectNodeContents(targetEl);
+            var sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+            showToast("Text selected - press Ctrl+C to copy", "info");
+        });
+    });
+
+    // Load debug view when switching to debug tab
+    tabs.forEach(function (tab) {
+        tab.addEventListener("click", function () {
+            if (tab.dataset.tab === "debug") {
+                loadDebugLive();
+            }
+        });
     });
 
     // Initial load
     pollStatus();
     loadCameras();
-    loadDebugScreenshots();
 
     // Poll status every 5 seconds, cameras every 30 seconds
     setInterval(pollStatus, 5000);
     setInterval(loadCameras, 30000);
+    startDebugTimer();
 
 })();

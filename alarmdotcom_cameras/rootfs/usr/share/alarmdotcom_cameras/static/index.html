@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Alarm.com Cameras</title>
-    <link rel="stylesheet" href="static/style.css?v=0.1.9">
+    <link rel="stylesheet" href="static/style.css?v=0.1.10">
 </head>
 <body>
     <header>
@@ -17,6 +17,7 @@
         <button class="tab" data-tab="cameras">Cameras</button>
         <button class="tab" data-tab="settings">Settings</button>
         <button class="tab" data-tab="status">Status</button>
+        <button class="tab" data-tab="debug">Debug</button>
     </nav>
 
     <!-- Setup Tab -->
@@ -130,35 +131,48 @@
                 <dd id="status-stream">--</dd>
             </dl>
         </div>
+    </section>
+
+    <!-- Debug Tab -->
+    <section id="tab-debug" class="tab-content">
         <div class="card">
-            <h2>Debug Screenshots</h2>
-            <p class="note">Screenshots from the headless browser for debugging login issues.</p>
-            <div class="debug-screenshots">
+            <div class="card-header">
+                <h2>Live Browser View</h2>
                 <div>
-                    <h3>Login Page (on load)</h3>
-                    <img id="debug-login-screenshot" alt="Login page screenshot"
-                         style="max-width:100%;border:1px solid #444;cursor:pointer;"
-                         onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
+                    <label style="display:inline;margin:0;font-size:0.8rem;">
+                        <input type="checkbox" id="debug-auto-refresh" checked> Auto-refresh (30s)
+                    </label>
+                    <button class="btn-small" id="debug-refresh-btn" style="margin-left:8px;">Refresh Now</button>
                 </div>
-                <div style="margin-top:1rem;">
-                    <h3>Login Result (after submit)</h3>
-                    <img id="debug-login-failed-screenshot" alt="Login result screenshot"
-                         style="max-width:100%;border:1px solid #444;cursor:pointer;"
-                         onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
-                </div>
-                <div style="margin-top:1rem;">
-                    <h3>Post-Challenge (after 2FA/CAPTCHA)</h3>
-                    <img id="debug-post-challenge-screenshot" alt="Post-challenge screenshot"
-                         style="max-width:100%;border:1px solid #444;cursor:pointer;"
-                         onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
-                </div>
-                <button type="button" class="btn-small" id="refresh-debug-btn" style="margin-top:0.5rem;">Refresh Screenshots</button>
             </div>
+            <p class="note">Live screenshot and state from the headless browser. Updated every 30 seconds when auto-refresh is on.</p>
+            <div id="debug-status" style="font-size:0.85rem;margin-bottom:8px;color:var(--text-secondary);">Not loaded yet</div>
+
+            <div style="margin-bottom:12px;">
+                <strong>Current URL:</strong>
+                <code id="debug-url" style="word-break:break-all;user-select:all;">--</code>
+                <button class="btn-copy" data-copy-target="debug-url" title="Copy URL">Copy</button>
+            </div>
+
+            <div style="margin-bottom:12px;">
+                <img id="debug-live-screenshot" alt="Live browser screenshot"
+                     style="max-width:100%;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;"
+                     onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
+            </div>
+
+            <details id="debug-dom-details" style="margin-bottom:12px;">
+                <summary style="cursor:pointer;font-weight:600;padding:8px 0;">DOM Summary (click to expand)</summary>
+                <div style="position:relative;">
+                    <button class="btn-copy" data-copy-target="debug-dom-content" title="Copy DOM"
+                            style="position:absolute;top:4px;right:4px;">Copy</button>
+                    <pre id="debug-dom-content" style="background:#f0f0f0;padding:12px;border-radius:var(--radius);overflow-x:auto;font-size:0.75rem;line-height:1.4;max-height:600px;overflow-y:auto;white-space:pre-wrap;user-select:all;">No data yet</pre>
+                </div>
+            </details>
         </div>
     </section>
 
     <div id="toast-container"></div>
 
-    <script src="static/app.js?v=0.1.9"></script>
+    <script src="static/app.js?v=0.1.10"></script>
 </body>
 </html>

@@ -331,6 +331,113 @@ async def get_debug_screenshot(request: web.Request) -> web.Response:
     )
 
 
+async def get_debug_live(request: web.Request) -> web.Response:
+    """Take a live screenshot and return current browser state as JSON.
+
+    Returns: { url, title, dom_summary, screenshot_b64 }
+    """
+    import base64
+
+    browser: BrowserEngine = request.app["browser"]
+
+    if not browser.state.browser_alive:
+        return web.json_response({"error": "Browser not running"}, status=503)
+
+    try:
+        page = await browser._get_page()
+        url = page.url
+        title = await page.title()
+
+        # Take screenshot
+        screenshot_bytes = await page.screenshot(full_page=True)
+        screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
+
+        # Dump DOM summary
+        dom_summary = await page.evaluate("""
+            () => {
+                const parts = [];
+                parts.push('URL: ' + window.location.href);
+                parts.push('Title: ' + document.title);
+                parts.push('');
+
+                // Forms
+                const forms = document.querySelectorAll('form');
+                parts.push('=== FORMS (' + forms.length + ') ===');
+                forms.forEach((f, i) => {
+                    parts.push('  form[' + i + '] id="' + f.id + '" action="' + f.action + '" method="' + f.method + '"');
+                });
+                parts.push('');
+
+                // Inputs
+                const inputs = document.querySelectorAll('input, textarea, select');
+                parts.push('=== INPUTS (' + inputs.length + ') ===');
+                Array.from(inputs).slice(0, 30).forEach(e => {
+                    const val = e.type === 'password' ? '***' : (e.value || '').substring(0, 50);
+                    parts.push('  <' + e.tagName + ' id="' + e.id + '" type="' + e.type +
+                        '" name="' + e.name + '" placeholder="' + (e.placeholder || '') +
+                        '" value="' + val + '"' +
+                        (e.disabled ? ' disabled' : '') +
+                        (e.hidden ? ' hidden' : '') + '>');
+                });
+                parts.push('');
+
+                // Buttons
+                const buttons = document.querySelectorAll('button, input[type="submit"]');
+                parts.push('=== BUTTONS (' + buttons.length + ') ===');
+                Array.from(buttons).slice(0, 20).forEach(e => {
+                    parts.push('  <' + e.tagName + ' id="' + e.id + '" class="' +
+                        (e.className || '').toString().substring(0, 80) + '"' +
+                        (e.disabled ? ' disabled' : '') + '>' +
+                        (e.textContent || e.value || '').trim().substring(0, 60));
+                });
+                parts.push('');
+
+                // Links (first 30)
+                const links = document.querySelectorAll('a[href]');
+                parts.push('=== LINKS (' + links.length + ', showing first 30) ===');
+                Array.from(links).slice(0, 30).forEach(a => {
+                    parts.push('  <A href="' + a.getAttribute('href') + '">' +
+                        (a.textContent || '').trim().substring(0, 60));
+                });
+                parts.push('');
+
+                // Key elements (errors, alerts, camera/video)
+                const special = document.querySelectorAll(
+                    '[class*="error"], [class*="alert"], [class*="success"], ' +
+                    '[class*="dashboard"], [class*="camera"], [class*="video"], ' +
+                    '[class*="two-factor"], [class*="verification"], [class*="trust"]'
+                );
+                if (special.length) {
+                    parts.push('=== KEY ELEMENTS (' + special.length + ') ===');
+                    Array.from(special).slice(0, 15).forEach(e => {
+                        parts.push('  <' + e.tagName + ' class="' +
+                            (e.className || '').toString().substring(0, 100) + '">');
+                        const text = (e.textContent || '').trim().substring(0, 120);
+                        if (text) parts.push('    text: ' + text);
+                    });
+                    parts.push('');
+                }
+
+                // Full visible text (first 3000 chars)
+                parts.push('=== PAGE TEXT ===');
+                const bodyText = document.body ? document.body.innerText : '<no body>';
+                parts.push(bodyText.substring(0, 3000));
+
+                return parts.join('\\n');
+            }
+        """)
+
+        return web.json_response({
+            "url": url,
+            "title": title,
+            "dom_summary": dom_summary,
+            "screenshot_b64": screenshot_b64,
+        })
+    except Exception as exc:
+        logger.exception("Debug live snapshot failed")
+        return web.json_response({"error": str(exc)}, status=500)
+
+
 # ---- Browser Profile ----
 
 
@@ -406,3 +513,4 @@ def setup_routes(app: web.Application) -> None:
 
     # Debug
     app.router.add_get("/api/debug/screenshot/{name}", get_debug_screenshot)
+    app.router.add_get("/api/debug/live", get_debug_live)

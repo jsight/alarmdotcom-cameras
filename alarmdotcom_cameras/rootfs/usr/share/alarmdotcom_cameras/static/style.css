@@ -404,3 +404,30 @@ dd {
     opacity: 0.6;
     cursor: not-allowed;
 }
+
+/* Copy button */
+.btn-copy {
+    display: inline-block;
+    padding: 2px 8px;
+    margin-left: 6px;
+    background: var(--border);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.7rem;
+    cursor: pointer;
+    vertical-align: middle;
+    transition: background 0.2s;
+}
+
+.btn-copy:hover {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
+.btn-copy.copied {
+    background: var(--success);
+    color: white;
+    border-color: var(--success);
+}
