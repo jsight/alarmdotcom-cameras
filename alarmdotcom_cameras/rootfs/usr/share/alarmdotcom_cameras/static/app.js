@@ -469,48 +469,148 @@
     var debugTimer = null;
 
     function refreshDebugScreenshot() {
-        // Load screenshot as a plain image (separate endpoint, no JSON)
         var imgEl = document.getElementById("debug-live-screenshot");
-        if (imgEl) {
-            imgEl.src = API + "/debug/live/screenshot?t=" + Date.now();
-            imgEl.style.opacity = "1";
-        }
+        var errEl = document.getElementById("debug-screenshot-error");
+        if (!imgEl) return;
+
+        // Fetch as a request so we can inspect the content-type before
+        // handing it to the <img>.  The endpoint returns JSON on error.
+        fetch(API + "/debug/live/screenshot?t=" + Date.now())
+            .then(function (resp) {
+                var ct = (resp.headers.get("content-type") || "");
+                if (resp.ok && ct.indexOf("image/") !== -1) {
+                    return resp.blob();
+                }
+                // Error — try to extract message from JSON body
+                return resp.json().catch(function () { return {}; }).then(function (j) {
+                    throw new Error(j.error || ("HTTP " + resp.status));
+                });
+            })
+            .then(function (blob) {
+                imgEl.src = URL.createObjectURL(blob);
+                imgEl.style.display = "";
+                if (errEl) errEl.style.display = "none";
+            })
+            .catch(function (err) {
+                imgEl.style.display = "none";
+                if (errEl) {
+                    errEl.style.display = "";
+                    errEl.textContent = "Screenshot unavailable: " + (err.message || String(err));
+                }
+            });
     }
 
     function loadDebugLive() {
         var statusEl = document.getElementById("debug-status");
         var urlEl = document.getElementById("debug-url");
         var domEl = document.getElementById("debug-dom-content");
+        var rawHtmlEl = document.getElementById("debug-raw-html");
 
         if (statusEl) statusEl.textContent = "Loading...";
 
-        // Load screenshot separately as a plain image (avoids base64/JSON size issues)
+        // Load screenshot separately (avoids base64/JSON size issues)
         refreshDebugScreenshot();
 
-        // Load URL + DOM as small JSON
+        // Load URL + DOM + raw HTML + state as JSON (always returns 200 now)
         fetch(API + "/debug/live")
-            .then(function (resp) {
-                if (!resp.ok) {
-                    return resp.text().then(function (txt) {
-                        throw new Error("HTTP " + resp.status + ": " + txt.substring(0, 200));
-                    });
-                }
-                return resp.json();
-            })
+            .then(function (resp) { return resp.json(); })
             .then(function (data) {
                 if (urlEl) urlEl.textContent = data.url || "--";
-                if (domEl) domEl.textContent = data.dom_summary || "No data returned";
+
+                // Build status line with browser state
+                var parts = ["Updated: " + new Date().toLocaleTimeString()];
+                if (data.title) parts.push("Title: " + data.title);
+                parts.push("Browser: " + (data.browser_alive ? "alive" : "stopped"));
+                parts.push("Auth: " + (data.auth_status || "--"));
+                if (data.lock_held) parts.push("(lock held)");
+                if (data.error) parts.push("Error: " + data.error);
+
                 if (statusEl) {
-                    statusEl.textContent = "Updated: " + new Date().toLocaleTimeString() +
-                        " | Title: " + (data.title || "--");
-                    statusEl.style.color = "var(--success)";
+                    statusEl.textContent = parts.join(" | ");
+                    statusEl.style.color = data.error ? "var(--danger)" : "var(--success)";
+                }
+
+                // Page analysis — show error context when no DOM available
+                if (domEl) {
+                    if (data.dom_summary) {
+                        domEl.textContent = data.dom_summary;
+                    } else if (data.error) {
+                        domEl.textContent = "[No DOM available]\n\n" +
+                            "Browser alive: " + data.browser_alive + "\n" +
+                            "Auth status: " + (data.auth_status || "--") + "\n" +
+                            "Auth message: " + (data.auth_message || "--") + "\n" +
+                            "Lock held: " + data.lock_held + "\n" +
+                            "Error: " + data.error;
+                    } else {
+                        domEl.textContent = "No data returned";
+                    }
+                }
+
+                // Raw HTML DOM
+                if (rawHtmlEl) {
+                    if (data.raw_html) {
+                        rawHtmlEl.textContent = data.raw_html;
+                    } else if (data.error) {
+                        rawHtmlEl.textContent = "[No HTML available: " + data.error + "]";
+                    } else {
+                        rawHtmlEl.textContent = "No data yet";
+                    }
                 }
             })
             .catch(function (err) {
                 if (statusEl) {
-                    statusEl.textContent = "Error: " + (err.message || String(err));
+                    statusEl.textContent = "Fetch failed: " + (err.message || String(err));
                     statusEl.style.color = "var(--danger)";
                 }
+            });
+    }
+
+    function formatLogTime(ts) {
+        if (!ts) return "";
+        var d = new Date(ts * 1000);
+        return d.toLocaleTimeString();
+    }
+
+    var CONSOLE_COLORS = {
+        "log": "#d4d4d4", "info": "#6796e6", "warning": "#cd9731",
+        "error": "#f44747", "pageerror": "#f44747", "debug": "#888",
+    };
+
+    function loadDebugLogs() {
+        var consoleEl = document.getElementById("debug-console-logs");
+        var serverEl = document.getElementById("debug-server-logs");
+
+        fetch(API + "/debug/logs")
+            .then(function (resp) { return resp.json(); })
+            .then(function (data) {
+                // Browser console logs
+                if (consoleEl) {
+                    if (data.console_logs && data.console_logs.length) {
+                        var lines = data.console_logs.map(function (e) {
+                            return formatLogTime(e.time) + " [" + e.type + "] " + e.text;
+                        });
+                        consoleEl.textContent = lines.join("\n");
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    } else {
+                        consoleEl.textContent = "No console logs captured yet";
+                    }
+                }
+
+                // Server logs
+                if (serverEl) {
+                    if (data.server_logs && data.server_logs.length) {
+                        var lines = data.server_logs.map(function (e) {
+                            return e.message;
+                        });
+                        serverEl.textContent = lines.join("\n");
+                        serverEl.scrollTop = serverEl.scrollHeight;
+                    } else {
+                        serverEl.textContent = "No server logs available";
+                    }
+                }
+            })
+            .catch(function () {
+                // Silently fail
             });
     }
 
@@ -519,7 +619,16 @@
     if (debugRefreshBtn) {
         debugRefreshBtn.addEventListener("click", function () {
             loadDebugLive();
+            loadDebugLogs();
             showToast("Debug view refreshed", "info");
+        });
+    }
+
+    var debugRefreshLogsBtn = document.getElementById("debug-refresh-logs-btn");
+    if (debugRefreshLogsBtn) {
+        debugRefreshLogsBtn.addEventListener("click", function () {
+            loadDebugLogs();
+            showToast("Logs refreshed", "info");
         });
     }
 
@@ -542,6 +651,7 @@
             var debugTab = document.getElementById("tab-debug");
             if (debugTab && debugTab.classList.contains("active") && debugAutoRefresh) {
                 loadDebugLive();
+                loadDebugLogs();
             }
         }, 30000);
     }
@@ -585,6 +695,7 @@
         tab.addEventListener("click", function () {
             if (tab.dataset.tab === "debug") {
                 loadDebugLive();
+                loadDebugLogs();
             }
         });
     });
@@ -593,7 +704,7 @@
     pollStatus();
     loadCameras();
     // Load debug on startup too (in case user reloads while on debug tab)
-    setTimeout(loadDebugLive, 1000);
+    setTimeout(function () { loadDebugLive(); loadDebugLogs(); }, 1000);
 
     // Poll status every 5 seconds, cameras every 30 seconds
     setInterval(pollStatus, 5000);

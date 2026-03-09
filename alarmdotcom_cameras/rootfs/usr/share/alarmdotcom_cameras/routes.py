@@ -22,7 +22,7 @@ async def health_check(request: web.Request) -> web.Response:
     browser: BrowserEngine = request.app["browser"]
     health = browser.get_health()
     health["status"] = "ok"
-    health["version"] = "0.1.0"
+    health["version"] = "0.1.12"
     # Include config for the settings display
     config = request.app["config"]
     health["snapshot_interval"] = config["snapshot_interval"]
@@ -332,110 +332,153 @@ async def get_debug_screenshot(request: web.Request) -> web.Response:
 
 
 async def get_debug_live(request: web.Request) -> web.Response:
-    """Return current browser URL and DOM summary as small JSON.
+    """Return current browser URL and DOM summary as JSON.
 
-    Screenshot is served separately via /api/debug/live/screenshot to
-    avoid huge JSON payloads that can timeout or fail to parse.
+    Always returns 200 with useful state info, even when the browser
+    or page is unavailable.  Screenshot is served separately via
+    /api/debug/live/screenshot.
     """
     browser: BrowserEngine = request.app["browser"]
+    no_cache = {"Cache-Control": "no-cache, no-store"}
+
+    # Base state — always included so the frontend always has something
+    base = {
+        "browser_alive": browser.state.browser_alive,
+        "auth_status": browser.state.auth_status.value,
+        "auth_message": browser.state.auth_message or "",
+        "lock_held": browser._lock.locked(),
+    }
 
     if not browser.state.browser_alive:
         return web.json_response(
-            {"error": "Browser not running", "url": "", "title": "", "dom_summary": ""},
-            status=503,
-            headers={"Cache-Control": "no-cache, no-store"},
+            {**base, "url": "", "title": "", "dom_summary": "",
+             "raw_html": "", "error": "Browser not running"},
+            headers=no_cache,
+        )
+
+    # Check for an existing page without creating a blank one
+    page = browser._page
+    if page is None or page.is_closed():
+        return web.json_response(
+            {**base, "url": "", "title": "", "dom_summary": "",
+             "raw_html": "", "error": "No page open (browser idle)"},
+            headers=no_cache,
         )
 
     try:
-        page = await browser._get_page()
         url = page.url
-        title = await page.title()
+        title = await asyncio.wait_for(page.title(), timeout=5)
 
         # Dump DOM summary
-        dom_summary = await page.evaluate("""
-            () => {
-                const parts = [];
-                parts.push('URL: ' + window.location.href);
-                parts.push('Title: ' + document.title);
-                parts.push('');
+        dom_summary = await asyncio.wait_for(
+            page.evaluate("""
+                () => {
+                    const parts = [];
+                    parts.push('URL: ' + window.location.href);
+                    parts.push('Title: ' + document.title);
+                    parts.push('');
 
-                // Forms
-                const forms = document.querySelectorAll('form');
-                parts.push('=== FORMS (' + forms.length + ') ===');
-                forms.forEach((f, i) => {
-                    parts.push('  form[' + i + '] id="' + f.id + '" action="' + f.action + '" method="' + f.method + '"');
-                });
-                parts.push('');
-
-                // Inputs
-                const inputs = document.querySelectorAll('input, textarea, select');
-                parts.push('=== INPUTS (' + inputs.length + ') ===');
-                Array.from(inputs).slice(0, 30).forEach(e => {
-                    const val = e.type === 'password' ? '***' : (e.value || '').substring(0, 50);
-                    parts.push('  <' + e.tagName + ' id="' + e.id + '" type="' + e.type +
-                        '" name="' + e.name + '" placeholder="' + (e.placeholder || '') +
-                        '" value="' + val + '"' +
-                        (e.disabled ? ' disabled' : '') +
-                        (e.hidden ? ' hidden' : '') + '>');
-                });
-                parts.push('');
-
-                // Buttons
-                const buttons = document.querySelectorAll('button, input[type="submit"]');
-                parts.push('=== BUTTONS (' + buttons.length + ') ===');
-                Array.from(buttons).slice(0, 20).forEach(e => {
-                    parts.push('  <' + e.tagName + ' id="' + e.id + '" class="' +
-                        (e.className || '').toString().substring(0, 80) + '"' +
-                        (e.disabled ? ' disabled' : '') + '>' +
-                        (e.textContent || e.value || '').trim().substring(0, 60));
-                });
-                parts.push('');
-
-                // Links (first 30)
-                const links = document.querySelectorAll('a[href]');
-                parts.push('=== LINKS (' + links.length + ', showing first 30) ===');
-                Array.from(links).slice(0, 30).forEach(a => {
-                    parts.push('  <A href="' + a.getAttribute('href') + '">' +
-                        (a.textContent || '').trim().substring(0, 60));
-                });
-                parts.push('');
-
-                // Key elements (errors, alerts, camera/video)
-                const special = document.querySelectorAll(
-                    '[class*="error"], [class*="alert"], [class*="success"], ' +
-                    '[class*="dashboard"], [class*="camera"], [class*="video"], ' +
-                    '[class*="two-factor"], [class*="verification"], [class*="trust"]'
-                );
-                if (special.length) {
-                    parts.push('=== KEY ELEMENTS (' + special.length + ') ===');
-                    Array.from(special).slice(0, 15).forEach(e => {
-                        parts.push('  <' + e.tagName + ' class="' +
-                            (e.className || '').toString().substring(0, 100) + '">');
-                        const text = (e.textContent || '').trim().substring(0, 120);
-                        if (text) parts.push('    text: ' + text);
+                    // Forms
+                    const forms = document.querySelectorAll('form');
+                    parts.push('=== FORMS (' + forms.length + ') ===');
+                    forms.forEach((f, i) => {
+                        parts.push('  form[' + i + '] id="' + f.id + '" action="' + f.action + '" method="' + f.method + '"');
                     });
                     parts.push('');
+
+                    // Inputs
+                    const inputs = document.querySelectorAll('input, textarea, select');
+                    parts.push('=== INPUTS (' + inputs.length + ') ===');
+                    Array.from(inputs).slice(0, 30).forEach(e => {
+                        const val = e.type === 'password' ? '***' : (e.value || '').substring(0, 50);
+                        parts.push('  <' + e.tagName + ' id="' + e.id + '" type="' + e.type +
+                            '" name="' + e.name + '" placeholder="' + (e.placeholder || '') +
+                            '" value="' + val + '"' +
+                            (e.disabled ? ' disabled' : '') +
+                            (e.hidden ? ' hidden' : '') + '>');
+                    });
+                    parts.push('');
+
+                    // Buttons
+                    const buttons = document.querySelectorAll('button, input[type="submit"]');
+                    parts.push('=== BUTTONS (' + buttons.length + ') ===');
+                    Array.from(buttons).slice(0, 20).forEach(e => {
+                        parts.push('  <' + e.tagName + ' id="' + e.id + '" class="' +
+                            (e.className || '').toString().substring(0, 80) + '"' +
+                            (e.disabled ? ' disabled' : '') + '>' +
+                            (e.textContent || e.value || '').trim().substring(0, 60));
+                    });
+                    parts.push('');
+
+                    // Links (first 30)
+                    const links = document.querySelectorAll('a[href]');
+                    parts.push('=== LINKS (' + links.length + ', showing first 30) ===');
+                    Array.from(links).slice(0, 30).forEach(a => {
+                        parts.push('  <A href="' + a.getAttribute('href') + '">' +
+                            (a.textContent || '').trim().substring(0, 60));
+                    });
+                    parts.push('');
+
+                    // Key elements (errors, alerts, camera/video)
+                    const special = document.querySelectorAll(
+                        '[class*="error"], [class*="alert"], [class*="success"], ' +
+                        '[class*="dashboard"], [class*="camera"], [class*="video"], ' +
+                        '[class*="two-factor"], [class*="verification"], [class*="trust"]'
+                    );
+                    if (special.length) {
+                        parts.push('=== KEY ELEMENTS (' + special.length + ') ===');
+                        Array.from(special).slice(0, 15).forEach(e => {
+                            parts.push('  <' + e.tagName + ' class="' +
+                                (e.className || '').toString().substring(0, 100) + '">');
+                            const text = (e.textContent || '').trim().substring(0, 120);
+                            if (text) parts.push('    text: ' + text);
+                        });
+                        parts.push('');
+                    }
+
+                    // Full visible text (first 5000 chars)
+                    parts.push('=== PAGE TEXT ===');
+                    const bodyText = document.body ? document.body.innerText : '<no body>';
+                    parts.push(bodyText.substring(0, 5000));
+
+                    return parts.join('\\n');
                 }
+            """),
+            timeout=10,
+        )
 
-                // Full visible text (first 3000 chars)
-                parts.push('=== PAGE TEXT ===');
-                const bodyText = document.body ? document.body.innerText : '<no body>';
-                parts.push(bodyText.substring(0, 3000));
-
-                return parts.join('\\n');
-            }
-        """)
+        # Full raw HTML (separate evaluate to keep independent of summary)
+        raw_html = ""
+        try:
+            raw_html = await asyncio.wait_for(
+                page.evaluate(
+                    "() => document.documentElement.outerHTML.substring(0, 512000)"
+                ),
+                timeout=10,
+            )
+        except Exception as html_exc:
+            raw_html = "[Failed to capture raw HTML: " + str(html_exc) + "]"
 
         return web.json_response(
-            {"url": url, "title": title, "dom_summary": dom_summary},
-            headers={"Cache-Control": "no-cache, no-store"},
+            {**base, "url": url, "title": title,
+             "dom_summary": dom_summary, "raw_html": raw_html},
+            headers=no_cache,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Debug live state timed out (page may be navigating)")
+        return web.json_response(
+            {**base, "url": getattr(page, "url", ""), "title": "",
+             "dom_summary": "", "raw_html": "",
+             "error": "Timed out reading page (browser may be navigating)"},
+            headers=no_cache,
         )
     except Exception as exc:
         logger.exception("Debug live state failed")
         return web.json_response(
-            {"error": str(exc), "url": "", "title": "", "dom_summary": ""},
-            status=500,
-            headers={"Cache-Control": "no-cache, no-store"},
+            {**base, "url": getattr(page, "url", ""), "title": "",
+             "dom_summary": "", "raw_html": "",
+             "error": str(exc)},
+            headers=no_cache,
         )
 
 
@@ -444,23 +487,63 @@ async def get_debug_live_screenshot(request: web.Request) -> web.Response:
 
     Served as a separate endpoint so the browser can load it as a plain
     <img src="..."> without base64 encoding or large JSON payloads.
+
+    Returns a JSON error (not plain text) on failure so the frontend
+    can distinguish image-load errors from network errors.
     """
     browser: BrowserEngine = request.app["browser"]
+    no_cache = {"Cache-Control": "no-cache, no-store"}
 
     if not browser.state.browser_alive:
-        return web.Response(text="Browser not running", status=503)
+        return web.json_response(
+            {"error": "Browser not running"}, status=503, headers=no_cache,
+        )
+
+    # Use existing page — don't create a blank one as a side-effect
+    page = browser._page
+    if page is None or page.is_closed():
+        return web.json_response(
+            {"error": "No page open (browser idle)"}, status=503, headers=no_cache,
+        )
 
     try:
-        page = await browser._get_page()
-        screenshot_bytes = await page.screenshot(full_page=True)
+        screenshot_bytes = await asyncio.wait_for(
+            page.screenshot(full_page=True), timeout=10,
+        )
         return web.Response(
             body=screenshot_bytes,
             content_type="image/png",
-            headers={"Cache-Control": "no-cache, no-store"},
+            headers=no_cache,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Debug screenshot timed out (page may be navigating)")
+        return web.json_response(
+            {"error": "Screenshot timed out (page may be navigating)"},
+            status=503, headers=no_cache,
         )
     except Exception as exc:
         logger.exception("Debug live screenshot failed")
-        return web.Response(text=str(exc), status=500)
+        return web.json_response(
+            {"error": str(exc)}, status=500, headers=no_cache,
+        )
+
+
+async def get_debug_logs(request: web.Request) -> web.Response:
+    """Return browser console logs and server logs for the debug UI."""
+    browser: BrowserEngine = request.app["browser"]
+    no_cache = {"Cache-Control": "no-cache, no-store"}
+
+    # Browser console logs (from Playwright page events)
+    console_logs = list(browser.state.console_logs)
+
+    # Server logs from ring buffer (if available)
+    ring = request.app.get("log_ring_buffer")
+    server_logs = list(ring.records) if ring else []
+
+    return web.json_response(
+        {"console_logs": console_logs, "server_logs": server_logs},
+        headers=no_cache,
+    )
 
 
 # ---- Browser Profile ----
@@ -556,3 +639,4 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("/api/debug/screenshot/{name}", get_debug_screenshot)
     app.router.add_get("/api/debug/live", get_debug_live)
     app.router.add_get("/api/debug/live/screenshot", get_debug_live_screenshot)
+    app.router.add_get("/api/debug/logs", get_debug_logs)

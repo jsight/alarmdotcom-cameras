@@ -2,8 +2,10 @@
 
 import argparse
 import asyncio
+import collections
 import logging
 import pathlib
+import time
 
 from aiohttp import web
 
@@ -12,6 +14,26 @@ from alarmdotcom_cameras.credentials import CredentialStore
 from alarmdotcom_cameras.routes import setup_routes
 
 logger = logging.getLogger(__name__)
+
+
+class RingBufferLogHandler(logging.Handler):
+    """Logging handler that stores records in a fixed-size ring buffer.
+
+    Records are accessible via the ``records`` deque for display in the
+    debug UI.
+    """
+
+    def __init__(self, capacity: int = 500) -> None:
+        super().__init__()
+        self.records: collections.deque[dict] = collections.deque(maxlen=capacity)
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append({
+            "time": record.created,
+            "level": record.levelname,
+            "name": record.name,
+            "message": self.format(record),
+        })
 
 
 def parse_args() -> argparse.Namespace:
@@ -249,12 +271,19 @@ def create_app(args: argparse.Namespace) -> web.Application:
 def main() -> None:
     args = parse_args()
 
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    log_format = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+
+    logging.basicConfig(level=log_level, format=log_format)
+
+    # Install ring buffer handler so debug UI can show server logs
+    ring_handler = RingBufferLogHandler(capacity=500)
+    ring_handler.setFormatter(logging.Formatter(log_format))
+    ring_handler.setLevel(log_level)
+    logging.getLogger().addHandler(ring_handler)
 
     app = create_app(args)
+    app["log_ring_buffer"] = ring_handler
     web.run_app(app, host="0.0.0.0", port=args.port)
 
 

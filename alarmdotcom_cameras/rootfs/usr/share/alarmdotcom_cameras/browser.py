@@ -5,6 +5,7 @@ and capture screenshots of live video feeds.
 """
 
 import asyncio
+import collections
 import enum
 import io
 import json
@@ -103,6 +104,9 @@ class BrowserState:
     last_snapshot_time: float = 0.0
     startup_time: float = field(default_factory=time.time)
     browser_alive: bool = False
+    console_logs: collections.deque = field(
+        default_factory=lambda: collections.deque(maxlen=200), repr=False,
+    )
     _stream_stop_event: asyncio.Event | None = field(default=None, repr=False)
 
 
@@ -195,6 +199,29 @@ class BrowserEngine:
         self.state.browser_alive = False
         logger.info("Browser engine stopped")
 
+    def _attach_console_listeners(self, page: Page) -> None:
+        """Attach console and error listeners to capture browser output."""
+        def on_console(msg):
+            entry = {
+                "time": time.time(),
+                "type": msg.type,
+                "text": msg.text,
+                "url": msg.location.get("url", "") if hasattr(msg, "location") and msg.location else "",
+            }
+            self.state.console_logs.append(entry)
+
+        def on_pageerror(exc):
+            entry = {
+                "time": time.time(),
+                "type": "pageerror",
+                "text": str(exc),
+                "url": "",
+            }
+            self.state.console_logs.append(entry)
+
+        page.on("console", on_console)
+        page.on("pageerror", on_pageerror)
+
     async def _get_page(self) -> Page:
         """Get or create a browser page."""
         if not self._context:
@@ -204,6 +231,7 @@ class BrowserEngine:
             return self._page
 
         self._page = await self._context.new_page()
+        self._attach_console_listeners(self._page)
         return self._page
 
     async def _close_page(self) -> None:

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Alarm.com Cameras</title>
-    <link rel="stylesheet" href="static/style.css?v=0.1.11">
+    <link rel="stylesheet" href="static/style.css?v=0.1.12">
 </head>
 <body>
     <header>
@@ -154,25 +154,62 @@
                 <button class="btn-copy" data-copy-target="debug-url" title="Copy URL">Copy</button>
             </div>
 
-            <div style="margin-bottom:12px;">
+            <div id="debug-screenshot-container" style="margin-bottom:12px;position:relative;min-height:60px;">
                 <img id="debug-live-screenshot" alt="Live browser screenshot"
-                     style="max-width:100%;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;"
-                     onerror="this.alt='No screenshot available';this.style.opacity='0.3'">
+                     style="max-width:100%;border:1px solid var(--border);border-radius:var(--radius);display:none;">
+                <div id="debug-screenshot-error"
+                     style="padding:24px;background:var(--bg-secondary, #f5f5f5);border:1px dashed var(--border, #ccc);border-radius:var(--radius, 4px);text-align:center;color:var(--text-secondary, #666);font-size:0.85rem;">
+                    Waiting for screenshot...
+                </div>
             </div>
 
             <details id="debug-dom-details" style="margin-bottom:12px;">
-                <summary style="cursor:pointer;font-weight:600;padding:8px 0;">DOM Summary (click to expand)</summary>
+                <summary style="cursor:pointer;font-weight:600;padding:8px 0;">Page Analysis (click to expand)</summary>
                 <div style="position:relative;">
-                    <button class="btn-copy" data-copy-target="debug-dom-content" title="Copy DOM"
+                    <button class="btn-copy" data-copy-target="debug-dom-content" title="Copy analysis"
                             style="position:absolute;top:4px;right:4px;">Copy</button>
                     <pre id="debug-dom-content" style="background:#f0f0f0;padding:12px;border-radius:var(--radius);overflow-x:auto;font-size:0.75rem;line-height:1.4;max-height:600px;overflow-y:auto;white-space:pre-wrap;user-select:all;">No data yet</pre>
                 </div>
             </details>
+
+            <details id="debug-raw-html-details" style="margin-bottom:12px;">
+                <summary style="cursor:pointer;font-weight:600;padding:8px 0;">Raw HTML DOM (click to expand)</summary>
+                <div style="position:relative;">
+                    <button class="btn-copy" data-copy-target="debug-raw-html" title="Copy raw HTML"
+                            style="position:absolute;top:4px;right:4px;">Copy</button>
+                    <pre id="debug-raw-html" style="background:#f0f0f0;padding:12px;border-radius:var(--radius);overflow-x:auto;font-size:0.7rem;line-height:1.3;max-height:600px;overflow-y:auto;white-space:pre-wrap;user-select:all;">No data yet</pre>
+                </div>
+            </details>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2>Browser Console</h2>
+                <button class="btn-small" id="debug-refresh-logs-btn">Refresh Logs</button>
+            </div>
+            <p class="note">Console output and JS errors from the headless Chromium browser.</p>
+            <div style="position:relative;">
+                <button class="btn-copy" data-copy-target="debug-console-logs" title="Copy console logs"
+                        style="position:absolute;top:4px;right:4px;z-index:1;">Copy</button>
+                <pre id="debug-console-logs" style="background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:var(--radius);font-size:0.7rem;line-height:1.3;max-height:400px;overflow-y:auto;white-space:pre-wrap;user-select:all;">No console logs yet</pre>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <h2>Server Logs</h2>
+            </div>
+            <p class="note">Recent log output from the add-on server process.</p>
+            <div style="position:relative;">
+                <button class="btn-copy" data-copy-target="debug-server-logs" title="Copy server logs"
+                        style="position:absolute;top:4px;right:4px;z-index:1;">Copy</button>
+                <pre id="debug-server-logs" style="background:#1e1e1e;color:#d4d4d4;padding:12px;border-radius:var(--radius);font-size:0.7rem;line-height:1.3;max-height:400px;overflow-y:auto;white-space:pre-wrap;user-select:all;">No server logs yet</pre>
+            </div>
         </div>
     </section>
 
     <div id="toast-container"></div>
 
-    <script src="static/app.js?v=0.1.11"></script>
+    <script src="static/app.js?v=0.1.12"></script>
 </body>
 </html>
