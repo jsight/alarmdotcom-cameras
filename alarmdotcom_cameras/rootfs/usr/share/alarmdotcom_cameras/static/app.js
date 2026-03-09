@@ -468,55 +468,77 @@
     var debugAutoRefresh = true;
     var debugTimer = null;
 
-    async function loadDebugLive() {
-        var statusEl = document.getElementById("debug-status");
-        var urlEl = document.getElementById("debug-url");
+    function refreshDebugScreenshot() {
+        // Load screenshot as a plain image (separate endpoint, no JSON)
         var imgEl = document.getElementById("debug-live-screenshot");
-        var domEl = document.getElementById("debug-dom-content");
-
-        statusEl.textContent = "Loading...";
-        try {
-            var resp = await apiFetch("debug/live");
-            if (!resp.ok) {
-                var err = await resp.json();
-                statusEl.textContent = "Error: " + (err.error || resp.statusText);
-                return;
-            }
-            var data = await resp.json();
-            urlEl.textContent = data.url || "--";
-            imgEl.src = "data:image/png;base64," + data.screenshot_b64;
+        if (imgEl) {
+            imgEl.src = API + "/debug/live/screenshot?t=" + Date.now();
             imgEl.style.opacity = "1";
-            imgEl.onclick = function () {
-                var w = window.open();
-                w.document.write('<img src="' + imgEl.src + '" style="max-width:100%">');
-            };
-            domEl.textContent = data.dom_summary || "No data";
-            statusEl.textContent = "Updated: " + new Date().toLocaleTimeString() +
-                " | Title: " + (data.title || "--");
-        } catch (err) {
-            statusEl.textContent = "Connection error: " + err.message;
         }
     }
 
-    document.getElementById("debug-refresh-btn").addEventListener("click", function () {
-        loadDebugLive();
-        showToast("Debug view refreshed", "info");
-    });
+    function loadDebugLive() {
+        var statusEl = document.getElementById("debug-status");
+        var urlEl = document.getElementById("debug-url");
+        var domEl = document.getElementById("debug-dom-content");
 
-    document.getElementById("debug-auto-refresh").addEventListener("change", function () {
-        debugAutoRefresh = this.checked;
-        if (debugAutoRefresh) {
-            startDebugTimer();
-        } else if (debugTimer) {
-            clearInterval(debugTimer);
-            debugTimer = null;
-        }
-    });
+        if (statusEl) statusEl.textContent = "Loading...";
+
+        // Load screenshot separately as a plain image (avoids base64/JSON size issues)
+        refreshDebugScreenshot();
+
+        // Load URL + DOM as small JSON
+        fetch(API + "/debug/live")
+            .then(function (resp) {
+                if (!resp.ok) {
+                    return resp.text().then(function (txt) {
+                        throw new Error("HTTP " + resp.status + ": " + txt.substring(0, 200));
+                    });
+                }
+                return resp.json();
+            })
+            .then(function (data) {
+                if (urlEl) urlEl.textContent = data.url || "--";
+                if (domEl) domEl.textContent = data.dom_summary || "No data returned";
+                if (statusEl) {
+                    statusEl.textContent = "Updated: " + new Date().toLocaleTimeString() +
+                        " | Title: " + (data.title || "--");
+                    statusEl.style.color = "var(--success)";
+                }
+            })
+            .catch(function (err) {
+                if (statusEl) {
+                    statusEl.textContent = "Error: " + (err.message || String(err));
+                    statusEl.style.color = "var(--danger)";
+                }
+            });
+    }
+
+    // Wire up debug tab buttons (with null checks to avoid crashing IIFE)
+    var debugRefreshBtn = document.getElementById("debug-refresh-btn");
+    if (debugRefreshBtn) {
+        debugRefreshBtn.addEventListener("click", function () {
+            loadDebugLive();
+            showToast("Debug view refreshed", "info");
+        });
+    }
+
+    var debugAutoRefreshCb = document.getElementById("debug-auto-refresh");
+    if (debugAutoRefreshCb) {
+        debugAutoRefreshCb.addEventListener("change", function () {
+            debugAutoRefresh = this.checked;
+            if (debugAutoRefresh) {
+                startDebugTimer();
+            } else if (debugTimer) {
+                clearInterval(debugTimer);
+                debugTimer = null;
+            }
+        });
+    }
 
     function startDebugTimer() {
         if (debugTimer) clearInterval(debugTimer);
         debugTimer = setInterval(function () {
-            // Only refresh if the debug tab is visible
             var debugTab = document.getElementById("tab-debug");
             if (debugTab && debugTab.classList.contains("active") && debugAutoRefresh) {
                 loadDebugLive();
@@ -532,23 +554,31 @@
         if (!targetEl) return;
 
         var text = targetEl.textContent || targetEl.innerText;
-        navigator.clipboard.writeText(text).then(function () {
-            e.target.textContent = "Copied!";
-            e.target.classList.add("copied");
-            setTimeout(function () {
-                e.target.textContent = "Copy";
-                e.target.classList.remove("copied");
-            }, 2000);
-        }).catch(function () {
-            // Fallback for older browsers / no clipboard API
-            var range = document.createRange();
-            range.selectNodeContents(targetEl);
-            var sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(range);
-            showToast("Text selected - press Ctrl+C to copy", "info");
-        });
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () {
+                e.target.textContent = "Copied!";
+                e.target.classList.add("copied");
+                setTimeout(function () {
+                    e.target.textContent = "Copy";
+                    e.target.classList.remove("copied");
+                }, 2000);
+            }).catch(function () {
+                fallbackCopy(targetEl);
+            });
+        } else {
+            fallbackCopy(targetEl);
+        }
     });
+
+    function fallbackCopy(el) {
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        var sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+        try { document.execCommand("copy"); } catch (e) { /* ignore */ }
+        showToast("Text selected/copied", "info");
+    }
 
     // Load debug view when switching to debug tab
     tabs.forEach(function (tab) {
@@ -562,6 +592,8 @@
     // Initial load
     pollStatus();
     loadCameras();
+    // Load debug on startup too (in case user reloads while on debug tab)
+    setTimeout(loadDebugLive, 1000);
 
     // Poll status every 5 seconds, cameras every 30 seconds
     setInterval(pollStatus, 5000);

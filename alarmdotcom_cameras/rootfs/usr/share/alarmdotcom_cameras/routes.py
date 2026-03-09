@@ -332,25 +332,24 @@ async def get_debug_screenshot(request: web.Request) -> web.Response:
 
 
 async def get_debug_live(request: web.Request) -> web.Response:
-    """Take a live screenshot and return current browser state as JSON.
+    """Return current browser URL and DOM summary as small JSON.
 
-    Returns: { url, title, dom_summary, screenshot_b64 }
+    Screenshot is served separately via /api/debug/live/screenshot to
+    avoid huge JSON payloads that can timeout or fail to parse.
     """
-    import base64
-
     browser: BrowserEngine = request.app["browser"]
 
     if not browser.state.browser_alive:
-        return web.json_response({"error": "Browser not running"}, status=503)
+        return web.json_response(
+            {"error": "Browser not running", "url": "", "title": "", "dom_summary": ""},
+            status=503,
+            headers={"Cache-Control": "no-cache, no-store"},
+        )
 
     try:
         page = await browser._get_page()
         url = page.url
         title = await page.title()
-
-        # Take screenshot
-        screenshot_bytes = await page.screenshot(full_page=True)
-        screenshot_b64 = base64.b64encode(screenshot_bytes).decode("ascii")
 
         # Dump DOM summary
         dom_summary = await page.evaluate("""
@@ -427,15 +426,41 @@ async def get_debug_live(request: web.Request) -> web.Response:
             }
         """)
 
-        return web.json_response({
-            "url": url,
-            "title": title,
-            "dom_summary": dom_summary,
-            "screenshot_b64": screenshot_b64,
-        })
+        return web.json_response(
+            {"url": url, "title": title, "dom_summary": dom_summary},
+            headers={"Cache-Control": "no-cache, no-store"},
+        )
     except Exception as exc:
-        logger.exception("Debug live snapshot failed")
-        return web.json_response({"error": str(exc)}, status=500)
+        logger.exception("Debug live state failed")
+        return web.json_response(
+            {"error": str(exc), "url": "", "title": "", "dom_summary": ""},
+            status=500,
+            headers={"Cache-Control": "no-cache, no-store"},
+        )
+
+
+async def get_debug_live_screenshot(request: web.Request) -> web.Response:
+    """Take a live screenshot and return it as a PNG image.
+
+    Served as a separate endpoint so the browser can load it as a plain
+    <img src="..."> without base64 encoding or large JSON payloads.
+    """
+    browser: BrowserEngine = request.app["browser"]
+
+    if not browser.state.browser_alive:
+        return web.Response(text="Browser not running", status=503)
+
+    try:
+        page = await browser._get_page()
+        screenshot_bytes = await page.screenshot(full_page=True)
+        return web.Response(
+            body=screenshot_bytes,
+            content_type="image/png",
+            headers={"Cache-Control": "no-cache, no-store"},
+        )
+    except Exception as exc:
+        logger.exception("Debug live screenshot failed")
+        return web.Response(text=str(exc), status=500)
 
 
 # ---- Browser Profile ----
@@ -452,19 +477,35 @@ async def clear_browser_profile(request: web.Request) -> web.Response:
 # ---- Web UI ----
 
 
+NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
 async def index(request: web.Request) -> web.Response:
     """Serve the web UI."""
     index_path = STATIC_DIR / "index.html"
     if not index_path.exists():
         return web.Response(text="Web UI not found", status=500)
-    return web.FileResponse(
-        index_path,
-        headers={
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache",
-            "Expires": "0",
-        },
-    )
+    return web.FileResponse(index_path, headers=NO_CACHE_HEADERS)
+
+
+async def serve_static_no_cache(request: web.Request) -> web.Response:
+    """Serve a static file with no-cache headers.
+
+    HA Ingress can aggressively cache static files, so we serve JS/CSS
+    via explicit routes with no-cache headers instead of add_static().
+    """
+    filename = request.match_info["filename"]
+    # Security: only allow files directly in the static dir (no path traversal)
+    if "/" in filename or "\\" in filename or ".." in filename:
+        return web.Response(text="Forbidden", status=403)
+    filepath = STATIC_DIR / filename
+    if not filepath.exists():
+        return web.Response(text="Not found", status=404)
+    return web.FileResponse(filepath, headers=NO_CACHE_HEADERS)
 
 
 # ---- Route setup ----
@@ -477,7 +518,7 @@ def setup_routes(app: web.Application) -> None:
     app.router.add_get("//", index)
     app.router.add_get("///", index)
     app.router.add_get("////", index)
-    app.router.add_static("/static", STATIC_DIR, name="static")
+    app.router.add_get("/static/{filename}", serve_static_no_cache)
 
     # Health
     app.router.add_get("/api/health", health_check)
@@ -514,3 +555,4 @@ def setup_routes(app: web.Application) -> None:
     # Debug
     app.router.add_get("/api/debug/screenshot/{name}", get_debug_screenshot)
     app.router.add_get("/api/debug/live", get_debug_live)
+    app.router.add_get("/api/debug/live/screenshot", get_debug_live_screenshot)
