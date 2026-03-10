@@ -42,8 +42,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 # Install Chromium only (not Firefox/WebKit) and its remaining OS deps
 RUN playwright install chromium \
     && playwright install-deps chromium \
-    # Clean up Playwright cache of unnecessary files
-    && find /root/.cache/ms-playwright -name "*.pak" -not -name "en-US.pak" -not -name "resources.pak" -delete 2>/dev/null || true \
+    # Clean up unnecessary locale paks (keep en-US + essential rendering resources)
+    && find /root/.cache/ms-playwright -path "*/locales/*.pak" -not -name "en-US.pak" -delete 2>/dev/null || true \
     && rm -rf /root/.cache/ms-playwright/*/chrome-linux*/MEIPreload 2>/dev/null || true \
     # Clean up apt cache from install-deps
     && apt-get clean \

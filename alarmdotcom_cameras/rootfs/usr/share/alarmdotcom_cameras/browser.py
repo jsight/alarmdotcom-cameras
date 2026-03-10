@@ -44,11 +44,11 @@ SELECTORS = {
     # CAPTCHA / 2FA
     "captcha_element": 'iframe[src*="captcha"], [class*="captcha"], #captcha, .g-recaptcha, [data-sitekey]',
     "twofa_element": '#two-factor-authentication-input-field, input[name*="code"], input[id*="twoFactor"], input[id*="code" i], input[placeholder*="code" i], input.two-factor-input, input[class*="two-factor"], input[class*="verification"]',
-    "twofa_submit": 'button:has-text("Verify"), button.btn-color-primary, button[type="submit"], input[type="submit"]',
+    "twofa_submit": 'button:has-text("Verify"), button:has-text("Submit"), button:has-text("Confirm"), button.btn-color-primary',
     "twofa_resend": '.request-new-code-button, button:has-text("Request a new code"), button:has-text("Resend"), a:has-text("Resend"), a:has-text("Request a new code"), [class*="resend" i]',
     # Trust device page (shown after successful 2FA)
     "trust_device_name_input": 'input[placeholder*="Device Name"], input[placeholder*="device name"], input[class*="device-name"], input[id*="device-name" i]',
-    "trust_device_submit": 'button:has-text("Trust Device"), button:has-text("Trust"), button:has-text("Save"), button.btn-color-primary',
+    "trust_device_submit": 'button:has-text("Trust Device")',
     "trust_device_skip": 'button:has-text("Skip")',
     # Camera list / live view page
     "camera_item": '.video-camera-card, .camera-item, [class*="camera-card"], [data-camera-id]',
@@ -151,27 +151,85 @@ class BrowserEngine:
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
                 "--disable-extensions",
-                "--disable-background-networking",
                 "--disable-default-apps",
                 "--disable-sync",
                 "--disable-translate",
-                "--metrics-recording-only",
                 "--no-first-run",
                 "--disable-blink-features=AutomationControlled",
+                # Fix locale — without this, navigator.languages shows
+                # 'en-US@posix' in containers, which is a bot-detection
+                # red flag.  Force proper locale.
+                "--lang=en-US",
             ],
+            locale="en-US",
             viewport={"width": 1280, "height": 720},
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                "(KHTML, like Gecko) Chrome/131.0.6778.33 Safari/537.36"
             ),
             ignore_https_errors=True,
         )
 
-        # Remove the webdriver property to avoid detection
+        # Mask headless browser fingerprint signals.
+        # alarm.com's bot detection checks these properties and kills
+        # sessions that look automated.  These patches make the browser
+        # look like a normal desktop Chrome installation.
         await self._context.add_init_script("""
+            // Remove webdriver flag
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
+
+            // Fix navigator.languages (container shows ['en-US@posix'])
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en']
+            });
+
+            // Add window.chrome object (missing in headless Chrome)
+            if (!window.chrome) {
+                window.chrome = {
+                    runtime: {
+                        onMessage: { addListener: function() {} },
+                        sendMessage: function() {},
+                    },
+                    loadTimes: function() { return {}; },
+                    csi: function() { return {}; },
+                };
+            }
+
+            // Add fake plugins (headless Chrome has 0 plugins)
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => {
+                    const plugins = [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer',
+                          description: 'Portable Document Format',
+                          length: 1, item: function(i) { return this[i]; } },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+                          description: '', length: 1, item: function(i) { return this[i]; } },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin',
+                          description: '', length: 2, item: function(i) { return this[i]; } },
+                    ];
+                    plugins.namedItem = function(name) {
+                        return this.find(p => p.name === name) || null;
+                    };
+                    plugins.refresh = function() {};
+                    return plugins;
+                }
+            });
+
+            // Add deviceMemory (missing in headless)
+            Object.defineProperty(navigator, 'deviceMemory', {
+                get: () => 8
+            });
+
+            // Fix Permissions API (headless returns 'denied' for notifications)
+            const origQuery = navigator.permissions.query.bind(navigator.permissions);
+            navigator.permissions.query = (params) => {
+                if (params.name === 'notifications') {
+                    return Promise.resolve({ state: 'prompt', onchange: null });
+                }
+                return origQuery(params);
+            };
         """)
 
         self.state.browser_alive = True
@@ -338,7 +396,11 @@ class BrowserEngine:
 
         try:
             page = await self._get_page()
-            await page.goto(LOGIN_URL, wait_until="networkidle", timeout=30_000)
+
+            # alarm.com can be very slow (60+ seconds).  Use generous timeouts
+            # everywhere and never bail out just because a wait timed out.
+            await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=120_000)
+            await self._wait_for_page_content(page, "login page")
             await self._debug_page_state(page, "login_page_loaded")
 
             # Check if already logged in (session restored from persistent context)
@@ -349,19 +411,6 @@ class BrowserEngine:
                 logger.info("Already authenticated from saved session")
                 return AuthStatus.AUTHENTICATED
 
-            # Save a debug screenshot of the login page
-            try:
-                debug_dir = pathlib.Path(self._data_dir) / "debug"
-                debug_dir.mkdir(exist_ok=True)
-                await page.screenshot(
-                    path=str(debug_dir / "login_page.png"), full_page=True
-                )
-                logger.debug(
-                    "Saved login page screenshot to %s", debug_dir / "login_page.png"
-                )
-            except Exception:
-                pass
-
             # Dismiss cookie consent banner if present
             await self._dismiss_cookie_banner(page)
 
@@ -371,80 +420,65 @@ class BrowserEngine:
 
             # Fill in credentials
             username_input = await page.wait_for_selector(
-                SELECTORS["username_input"], timeout=10_000
+                SELECTORS["username_input"], timeout=60_000
             )
             await username_input.fill(username)
 
             password_input = await page.wait_for_selector(
-                SELECTORS["password_input"], timeout=5_000
+                SELECTORS["password_input"], timeout=30_000
             )
             await password_input.fill(password)
 
-            # Debug: dump the form HTML to help find the right submit button
-            try:
-                form_html = await page.evaluate("""
-                    () => {
-                        const form = document.querySelector('form');
-                        if (form) return form.outerHTML;
-                        // Fallback: find all submit-type inputs/buttons
-                        const submits = document.querySelectorAll('input[type="submit"], button[type="submit"], button');
-                        return Array.from(submits).map(e =>
-                            `<${e.tagName} id="${e.id}" class="${e.className}" type="${e.type}" value="${e.value}" name="${e.name}">`
-                        ).join('\\n');
-                    }
-                """)
-                logger.debug("Login page form HTML:\n%s", form_html[:3000])
-            except Exception:
-                pass
-
-            # Submit login form.
-            # Strategy: try el.click() first, fall back to form.submit().
-            # Both can trigger a page navigation that destroys the JS context,
-            # so we handle that error as a success signal.
+            # Submit login form
             login_button = await page.wait_for_selector(
-                SELECTORS["login_button"], timeout=5_000
+                SELECTORS["login_button"], timeout=30_000
             )
 
-            submitted = False
-            # Attempt 1: JavaScript click on the submit button
             try:
                 await login_button.evaluate("el => el.click()")
                 logger.debug("Clicked login button via JavaScript")
-                await page.wait_for_load_state("networkidle", timeout=30_000)
             except Exception as exc:
-                if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
-                    logger.debug("Login click triggered navigation (good)")
-                    submitted = True
-                else:
-                    logger.debug("Login click error: %s", exc)
+                logger.debug("Login click error (may be expected): %s", exc)
 
-            await self._debug_page_state(page, "after_login_click")
-
-            # Attempt 2: direct form.submit() if click didn't navigate
-            if not submitted and _is_login_page(page.url):
-                logger.info("Still on login page after click, trying form.submit()")
+            # Wait for the login page to go away.  In Docker the navigation
+            # can be very slow (60+ seconds).  _wait_for_page_content() would
+            # return immediately because the login page itself has inputs, so
+            # we explicitly wait for the URL to change or login elements to
+            # disappear before inspecting the next state.
+            pre_login_url = page.url
+            for i in range(90):
+                await asyncio.sleep(2)
+                cur_url = page.url
+                if cur_url != pre_login_url:
+                    logger.info(
+                        "Login page navigated after %ds: %s -> %s",
+                        (i + 1) * 2, pre_login_url, cur_url,
+                    )
+                    break
+                # Also check if the login form itself disappeared (SPA transition)
                 try:
-                    await page.evaluate("""
+                    still_login = await page.evaluate("""
                         () => {
-                            const form = document.getElementById('aspnetForm')
-                                || document.querySelector('form');
-                            if (form) form.submit();
+                            const loginBtn = document.querySelector('#ctl00_ContentPlaceHolder1_loginform_signInButton, input[value="Log In"]');
+                            return !!loginBtn;
                         }
                     """)
-                    await page.wait_for_load_state("networkidle", timeout=30_000)
-                except Exception as exc:
-                    if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
-                        logger.debug("form.submit() triggered navigation (good)")
-                        submitted = True
-                    else:
-                        logger.debug("form.submit() error: %s", exc)
+                    if not still_login:
+                        logger.info("Login form disappeared after %ds", (i + 1) * 2)
+                        break
+                except Exception:
+                    break  # page context destroyed = navigation happened
+                if i % 15 == 14:
+                    logger.info("Still waiting for login navigation (%ds)...", (i + 1) * 2)
+            else:
+                logger.warning("Login page did not navigate after 180s")
 
-            # Wait for the destination page to finish loading
-            try:
-                await page.wait_for_load_state("load", timeout=15_000)
-                await page.wait_for_load_state("networkidle", timeout=15_000)
-            except Exception:
-                pass
+            # Now wait for the NEW page to render its content
+            await self._wait_for_page_content(page, "post-login", timeout=120)
+
+            # Handle alarm.com "We're having problems" error page
+            await self._handle_error_page_retry(page)
+
             await self._debug_page_state(page, "post_login_settled")
 
             # Check result
@@ -465,36 +499,19 @@ class BrowserEngine:
                 return AuthStatus.AUTHENTICATED
 
             # Unknown state - take a screenshot for debugging
+            await self._debug_page_state(page, "login_failed")
             screenshot = await page.screenshot(full_page=True)
             self.state.challenge_screenshot = screenshot
-            # Also save to debug directory for the Status tab
-            try:
-                debug_dir = pathlib.Path(self._data_dir) / "debug"
-                debug_dir.mkdir(exist_ok=True)
-                (debug_dir / "login_failed.png").write_bytes(screenshot)
-            except Exception:
-                pass
             self.state.auth_status = AuthStatus.ERROR
             current_url = page.url
-            # Dump the page content for debugging
-            try:
-                page_text = await page.evaluate(
-                    "() => document.body ? document.body.innerText.substring(0, 2000) : ''"
-                )
-                logger.debug("Login failed page text:\n%s", page_text)
-            except Exception:
-                pass
             if _is_login_page(current_url):
                 self.state.auth_message = (
-                    "Login failed - still on login page. "
-                    "Check credentials or dismiss any popups. "
-                    "See debug screenshot in Status tab."
+                    "Login failed - still on login page. Check credentials."
                 )
                 logger.warning("Login failed - still on login page: %s", current_url)
             else:
                 self.state.auth_message = (
-                    "Login failed - unexpected page state. "
-                    "See debug screenshot in Status tab."
+                    f"Login failed - unexpected page: {current_url}"
                 )
                 logger.warning(
                     "Login resulted in unexpected page state: %s", current_url
@@ -574,14 +591,16 @@ class BrowserEngine:
     async def _dismiss_cookie_banner(self, page: Page) -> None:
         """Dismiss cookie consent banner if present on alarm.com."""
         try:
-            # Look for common cookie consent accept buttons
+            # alarm.com uses <input type="submit" id="acceptCookies"> not <button>
             accept_btn = await page.query_selector(
+                '#acceptCookies, '
+                '#onetrust-accept-btn-handler, '
+                'input[value="Accept all cookies" i], '
                 'button:has-text("Accept all Cookies"), '
                 'button:has-text("Accept All Cookies"), '
                 'button:has-text("Accept all cookies"), '
                 'button:has-text("Accept Cookies"), '
-                'a:has-text("Accept all Cookies"), '
-                '#onetrust-accept-btn-handler'
+                'a:has-text("Accept all Cookies")'
             )
             if accept_btn:
                 await accept_btn.click(force=True)
@@ -591,6 +610,141 @@ class BrowserEngine:
                 logger.debug("No cookie consent banner found")
         except Exception as exc:
             logger.debug("Cookie banner dismissal error: %s", exc)
+
+    async def _wait_for_spa_settled(self, page: Page, timeout: int = 30) -> None:
+        """Wait for the Ember SPA to finish initial load after auth.
+
+        The SPA makes API calls on load (dashboard data, WebSocket setup, etc).
+        These can fail (403, 409) causing it to transition to /web/system/app-error.
+        We wait for the page to stabilize, then handle errors before proceeding.
+        """
+        from urllib.parse import urlparse
+
+        logger.debug("Waiting for SPA to settle (up to %ds)...", timeout)
+
+        # Give the SPA time to make its initial API calls
+        prev_url = page.url
+        for i in range(timeout // 3):
+            await asyncio.sleep(3)
+            cur_url = page.url
+
+            # If we got redirected to login, session is dead
+            if _is_login_page(cur_url):
+                logger.warning("Session lost during SPA load (redirected to login)")
+                return
+
+            # Check if the URL stopped changing
+            if cur_url == prev_url:
+                # Check if the SPA has a loading spinner or is still loading
+                try:
+                    is_loading = await page.evaluate("""
+                        () => {
+                            const spinners = document.querySelectorAll('.loading, .spinner, [class*="loading"], [class*="spinner"]');
+                            return spinners.length > 0;
+                        }
+                    """)
+                    if not is_loading:
+                        break
+                except Exception:
+                    break
+            prev_url = cur_url
+            if i % 3 == 2:
+                logger.debug("SPA still settling (%ds), URL: %s", (i + 1) * 3, cur_url)
+
+        # Check for app-error state
+        cur_path = urlparse(page.url).path.lower()
+        if "app-error" in cur_path or "error" in cur_path:
+            logger.warning("SPA landed on error page: %s", page.url)
+            await self._debug_page_state(page, "spa_error")
+            await self._handle_error_page_retry(page)
+
+        logger.debug("SPA settled, URL: %s", page.url)
+
+    async def _wait_for_page_content(self, page: Page, label: str, timeout: int = 90) -> bool:
+        """Wait for the page to have meaningful DOM content.
+
+        Polls every 2 seconds for up to `timeout` seconds. Returns True if
+        content was found, False if we gave up. alarm.com can be very slow
+        (60+ seconds) so this must be patient.
+        """
+        for attempt in range(timeout // 2):
+            try:
+                has_content = await page.evaluate("""
+                    () => {
+                        const inputs = document.querySelectorAll('input');
+                        const buttons = document.querySelectorAll('button');
+                        const hasText = (document.body?.innerText || '').trim().length > 50;
+                        return (inputs.length > 0 || buttons.length > 1 || hasText);
+                    }
+                """)
+                if has_content:
+                    if attempt > 0:
+                        logger.debug("Page content ready for %s after %ds", label, (attempt + 1) * 2)
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(2)
+            if attempt % 10 == 9:
+                logger.info("Still waiting for %s to render (%ds)...", label, (attempt + 1) * 2)
+        logger.warning("Timed out waiting for %s content after %ds", label, timeout)
+        return False
+
+    async def _handle_error_page_retry(self, page: Page) -> None:
+        """Detect alarm.com error page and attempt recovery.
+
+        alarm.com sometimes shows 'We're having problems' or transitions to
+        /web/system/app-error when the Ember SPA's initial API calls fail
+        (e.g. 403 due to cookie/session timing). Retrying usually works.
+        """
+        from urllib.parse import urlparse
+
+        for retry in range(3):
+            cur_path = urlparse(page.url).path.lower()
+            try:
+                error_text = await page.evaluate("""
+                    () => {
+                        const h1 = document.querySelector('h1.page-header, h1');
+                        const body = (document.body?.innerText || '').substring(0, 500).toLowerCase();
+                        return {
+                            h1: h1 ? h1.textContent.trim() : '',
+                            hasError: body.includes('having problems') || body.includes('error') || body.includes('try again'),
+                        };
+                    }
+                """)
+            except Exception:
+                return
+
+            is_error = (
+                "having problems" in error_text.get("h1", "").lower()
+                or "app-error" in cur_path
+                or (error_text.get("hasError", False) and "error" in cur_path)
+            )
+            if not is_error:
+                return
+
+            logger.warning("Alarm.com error page detected (attempt %d, URL: %s), trying recovery", retry + 1, page.url)
+
+            # Try clicking "Try Again" / "Reload Application" button
+            try:
+                retry_btn = await page.query_selector(
+                    'button.btn-color-primary, '
+                    'button:has-text("Try Again"), '
+                    'button:has-text("Reload"), '
+                    'button.refresh'
+                )
+                if retry_btn:
+                    btn_text = await retry_btn.evaluate("el => el.textContent.trim().substring(0, 40)")
+                    logger.info("Clicking recovery button: %s", btn_text)
+                    await retry_btn.click()
+                    await self._wait_for_page_content(page, "error retry", timeout=90)
+                else:
+                    # No button found — try reloading the SPA via the nav
+                    logger.info("No retry button, attempting page reload via F5")
+                    await page.reload(wait_until="domcontentloaded", timeout=60_000)
+                    await self._wait_for_page_content(page, "error reload", timeout=90)
+            except Exception as exc:
+                logger.debug("Error recovery failed: %s", exc)
+                return
 
     async def _detect_captcha(self, page: Page) -> bool:
         """Detect if a CAPTCHA challenge is present."""
@@ -725,54 +879,65 @@ class BrowserEngine:
             # Click "Trust Device" button
             trust_btn = await page.query_selector(SELECTORS["trust_device_submit"])
             if trust_btn:
+                btn_info = await trust_btn.evaluate("""
+                    el => `<${el.tagName} id="${el.id}" class="${el.className}" text="${el.textContent?.trim().substring(0, 60)}">`
+                """)
+                logger.info("Trust Device button found: %s", btn_info)
                 await trust_btn.click(force=True)
                 logger.info("Clicked Trust Device button")
             else:
-                logger.warning("Trust Device button not found, trying Skip")
+                logger.warning("Trust Device button not found with selector: %s", SELECTORS["trust_device_submit"])
+                # Log all buttons on the page for debugging
+                try:
+                    all_btns = await page.evaluate("""
+                        () => Array.from(document.querySelectorAll('button')).map(b =>
+                            `<BUTTON id="${b.id}" class="${b.className}" text="${b.textContent.trim().substring(0, 60)}">`
+                        ).join('\\n')
+                    """)
+                    logger.info("All buttons on trust page:\n%s", all_btns[:2000])
+                except Exception:
+                    pass
+
                 skip_btn = await page.query_selector(SELECTORS["trust_device_skip"])
                 if skip_btn:
                     await skip_btn.click(force=True)
                     logger.info("Clicked Skip button on trust page")
+                else:
+                    logger.error("Neither Trust Device nor Skip button found")
 
-            # Wait for the SPA to process and redirect
+            # Wait patiently for the SPA to process and redirect.
+            # alarm.com can be very slow (60+ seconds).
             pre_url = page.url
-            for _ in range(15):
-                await asyncio.sleep(1)
+            for i in range(90):
+                await asyncio.sleep(2)
                 current_url = page.url
                 if current_url != pre_url:
                     logger.info(
-                        "Trust device redirected: %s -> %s", pre_url, current_url
+                        "Trust device redirected after %ds: %s -> %s",
+                        (i + 1) * 2, pre_url, current_url,
                     )
-                    await page.wait_for_load_state("networkidle", timeout=15_000)
+                    await self._wait_for_page_content(page, "post-trust-device", timeout=90)
                     break
-                # Check if button is still processing
+                # Check if the trust device form has disappeared
                 try:
-                    still_processing = await page.evaluate("""
+                    trust_still_visible = await page.evaluate("""
                         () => {
-                            const btns = document.querySelectorAll('button.btn-color-primary');
-                            return Array.from(btns).some(b => b.disabled);
+                            const input = document.querySelector('input[placeholder*="Device Name"]');
+                            return !!input;
                         }
                     """)
-                    if not still_processing:
-                        # Button done but URL didn't change — maybe the SPA
-                        # transitioned within the same URL; give it a moment
-                        await asyncio.sleep(1)
+                    if not trust_still_visible:
+                        logger.info("Trust device form disappeared after %ds", (i + 1) * 2)
                         break
                 except Exception:
-                    break
+                    pass
+                if i % 15 == 14:
+                    logger.info("Still waiting for trust device transition (%ds)...", (i + 1) * 2)
 
-            # After trusting, alarm.com may redirect to dashboard or another page.
+            # Handle error page if it appeared
+            await self._handle_error_page_retry(page)
+
             await self._debug_page_state(page, "post_trust_device")
-
-            # If still on the 2FA flow page, try navigating to the dashboard
-            current_url = page.url
-            if "two-factor" in current_url or "login-setup" in current_url:
-                logger.info("Still on 2FA flow page, navigating to dashboard...")
-                await page.goto(
-                    f"{ALARM_BASE_URL}/web/system/home",
-                    wait_until="networkidle",
-                    timeout=15_000,
-                )
 
             # Check if we're now logged in
             if await self._check_logged_in(page):
@@ -781,6 +946,22 @@ class BrowserEngine:
                 self.state.challenge_screenshot = None
                 self.state.last_auth_time = time.time()
                 logger.info("Device trusted, now authenticated")
+                return AuthStatus.AUTHENTICATED
+
+            # If on a /web/ path (not auth flow), treat as authenticated
+            from urllib.parse import urlparse
+            path = urlparse(page.url).path.lower()
+            auth_flow_prefixes = (
+                "/web/system-install/",
+                "/web/two-factor",
+                "/web/login",
+            )
+            if path.startswith("/web/") and not any(path.startswith(p) for p in auth_flow_prefixes):
+                logger.info("On /web/ path after trust device (%s), treating as authenticated", page.url)
+                self.state.auth_status = AuthStatus.AUTHENTICATED
+                self.state.auth_message = "Successfully authenticated (device trusted)"
+                self.state.challenge_screenshot = None
+                self.state.last_auth_time = time.time()
                 return AuthStatus.AUTHENTICATED
 
             # Not yet authenticated - screenshot for debugging
@@ -861,11 +1042,24 @@ class BrowserEngine:
                 submit = await page.query_selector(SELECTORS["twofa_submit"])
                 submitted_2fa = False
 
+                # Log exactly which element we found to catch mis-targeting
                 if submit:
-                    # Attempt 1: JavaScript click on the submit button
+                    btn_info = await submit.evaluate("""
+                        el => `<${el.tagName} id="${el.id}" class="${el.className}" type="${el.type || ''}" text="${el.textContent?.trim().substring(0, 60) || el.value || ''}">`
+                    """)
+                    logger.info("2FA submit button found: %s", btn_info)
+                else:
+                    logger.warning("No 2FA submit button found with selector: %s", SELECTORS["twofa_submit"])
+
+                if submit:
+                    # Click the submit button ONCE. Ember processes the click
+                    # asynchronously (API call → navigation), so we must NOT
+                    # double-click — that confuses alarm.com's server and
+                    # results in session loss (/login?m=no_session).
                     try:
-                        await submit.evaluate("el => el.click()")
-                        logger.info("Clicked 2FA submit button via JavaScript")
+                        await submit.click(force=True)
+                        logger.info("Clicked 2FA submit button")
+                        submitted_2fa = True
                     except Exception as exc:
                         if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
                             logger.debug("2FA click triggered navigation (good)")
@@ -873,87 +1067,66 @@ class BrowserEngine:
                         else:
                             logger.warning("2FA submit click error: %s", exc)
 
-                    # Attempt 2: Playwright click (dispatches real pointer events)
-                    if not submitted_2fa:
-                        await asyncio.sleep(2)
-                        pre_text = ""
+                if not submitted_2fa and not submit:
+                    # Last resort: try to find ANY button in the 2FA Ember component
+                    # that looks like a submit action, avoiding ASP.NET shell buttons
+                    logger.warning("Primary selector failed, searching for verify button in Ember component")
+                    fallback = await page.query_selector(
+                        '[class*="two-factor"] button, '
+                        '[class*="verification"] button, '
+                        '[class*="login-setup"] button, '
+                        '.ember-view button.btn-color-primary'
+                    )
+                    if fallback:
+                        fb_info = await fallback.evaluate("""
+                            el => `<${el.tagName} id="${el.id}" class="${el.className}" text="${el.textContent?.trim().substring(0, 60)}">`
+                        """)
+                        logger.info("Fallback 2FA button found: %s", fb_info)
                         try:
-                            pre_text = await page.evaluate(
-                                "() => document.body ? document.body.innerText.substring(0, 500) : ''"
-                            )
-                        except Exception:
-                            pass
-
-                        try:
-                            submit = await page.query_selector(SELECTORS["twofa_submit"])
-                            if submit:
-                                await submit.click(force=True)
-                                logger.info("Clicked 2FA submit via Playwright click(force=True)")
+                            await fallback.click(force=True)
+                            logger.info("Clicked fallback 2FA button")
                         except Exception as exc:
                             if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
-                                logger.debug("2FA Playwright click triggered navigation (good)")
-                                submitted_2fa = True
+                                logger.debug("Fallback click triggered navigation (good)")
                             else:
-                                logger.warning("2FA Playwright click error: %s", exc)
+                                logger.warning("Fallback 2FA click error: %s", exc)
+                    else:
+                        logger.error("No 2FA submit button found anywhere on the page")
 
-                    # Attempt 3: form.submit() fallback (like login form)
-                    if not submitted_2fa:
-                        await asyncio.sleep(2)
-                        try:
-                            post_text = await page.evaluate(
-                                "() => document.body ? document.body.innerText.substring(0, 500) : ''"
-                            )
-                            if post_text == pre_text:
-                                logger.info("Page unchanged after clicks, trying form.submit()")
-                                await page.evaluate("""
-                                    () => {
-                                        const form = document.querySelector('form');
-                                        if (form) form.submit();
-                                    }
-                                """)
-                                logger.info("Submitted 2FA form via form.submit()")
-                        except Exception as exc:
-                            if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
-                                logger.debug("2FA form.submit() triggered navigation (good)")
-                                submitted_2fa = True
-                            else:
-                                logger.warning("2FA form.submit() error: %s", exc)
-                else:
-                    # No submit button found at all - try form.submit()
-                    logger.warning("No 2FA submit button found, trying form.submit()")
-                    try:
-                        await page.evaluate("() => { const f = document.querySelector('form'); if (f) f.submit(); }")
-                    except Exception as exc:
-                        if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
-                            logger.debug("2FA form.submit() triggered navigation (good)")
-                        else:
-                            logger.warning("2FA form.submit() error: %s", exc)
-
-            # Wait for the page to settle after submission
-            try:
-                await page.wait_for_load_state("load", timeout=15_000)
-            except Exception:
-                pass
-            try:
-                await page.wait_for_load_state("networkidle", timeout=15_000)
-            except Exception:
-                pass
-
-            # Give the SPA time to process and transition
+            # Wait patiently for the SPA to process and transition.
+            # The URL may or may not change — Ember sometimes swaps content
+            # within the same URL (e.g. 2FA -> trust device on the same path).
+            # alarm.com can be very slow (60+ seconds).
             pre_url = page.url
-            for i in range(15):
-                await asyncio.sleep(1)
+            try:
+                pre_page_text = await page.evaluate(
+                    "() => (document.body?.innerText || '').substring(0, 200)"
+                )
+            except Exception:
+                pre_page_text = ""
+
+            for i in range(90):
+                await asyncio.sleep(2)
                 current = page.url
                 if current != pre_url:
-                    logger.info("URL changed after %ds: %s -> %s", i + 1, pre_url, current)
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=10_000)
-                    except Exception:
-                        pass
+                    logger.info("URL changed after %ds: %s -> %s", (i + 1) * 2, pre_url, current)
+                    await self._wait_for_page_content(page, "post-challenge", timeout=90)
                     break
-                if i % 5 == 4:
-                    # Log progress every 5 seconds during wait
-                    logger.info("Still waiting for URL change (%ds), current: %s", i + 1, current)
+                # Check if page content changed (Ember swapped views in same URL)
+                try:
+                    cur_text = await page.evaluate(
+                        "() => (document.body?.innerText || '').substring(0, 200)"
+                    )
+                    if cur_text != pre_page_text and len(cur_text.strip()) > 20:
+                        logger.info("Page content changed after %ds", (i + 1) * 2)
+                        break
+                except Exception:
+                    pass
+                if i % 15 == 14:
+                    logger.info("Still waiting for page transition (%ds), current: %s", (i + 1) * 2, current)
+
+            # Handle error page if it appeared
+            await self._handle_error_page_retry(page)
 
             await self._debug_page_state(page, "post_challenge_settled")
 
@@ -970,24 +1143,18 @@ class BrowserEngine:
                 logger.info("Challenge solved, now authenticated")
                 return AuthStatus.AUTHENTICATED
 
-            # If we're on a /web/ path but not detected as logged in,
-            # try navigating to the dashboard explicitly
+            # If we're on a /web/ path, we may be authenticated even if
+            # _check_logged_in didn't find the specific indicator element.
+            # The SPA may not have rendered the dashboard yet. Accept it.
             from urllib.parse import urlparse
             path = urlparse(page.url).path.lower()
-            if path.startswith("/web/"):
-                logger.info("On /web/ path after challenge, navigating to dashboard")
-                try:
-                    await page.goto(CAMERAS_URL, wait_until="networkidle", timeout=30_000)
-                    await self._debug_page_state(page, "navigated_to_dashboard")
-                    if await self._check_logged_in(page):
-                        self.state.auth_status = AuthStatus.AUTHENTICATED
-                        self.state.auth_message = "Successfully authenticated"
-                        self.state.challenge_screenshot = None
-                        self.state.last_auth_time = time.time()
-                        logger.info("Authenticated after navigating to dashboard")
-                        return AuthStatus.AUTHENTICATED
-                except Exception as exc:
-                    logger.warning("Dashboard navigation failed: %s", exc)
+            if path.startswith("/web/") and not _is_login_page(page.url):
+                logger.info("On /web/ path after challenge (%s), treating as authenticated", page.url)
+                self.state.auth_status = AuthStatus.AUTHENTICATED
+                self.state.auth_message = "Successfully authenticated"
+                self.state.challenge_screenshot = None
+                self.state.last_auth_time = time.time()
+                return AuthStatus.AUTHENTICATED
 
             # Still challenged?
             if await self._detect_captcha(page):
@@ -1048,13 +1215,10 @@ class BrowserEngine:
             await resend_elem.click(force=True)
             logger.info("Clicked 2FA resend code button")
 
-            # Wait for the SPA to process the resend and re-render
-            await asyncio.sleep(3)
-            await page.wait_for_load_state("networkidle", timeout=10_000)
-
             # Wait for the 2FA input to reappear (Ember re-renders the component)
+            await asyncio.sleep(5)
             try:
-                await page.wait_for_selector(SELECTORS["twofa_element"], timeout=5_000)
+                await page.wait_for_selector(SELECTORS["twofa_element"], timeout=30_000)
             except Exception:
                 logger.debug("2FA input not found after resend, page may have changed")
 
@@ -1099,101 +1263,98 @@ class BrowserEngine:
             current_url = page.url
             logger.debug("Starting camera discovery from URL: %s", current_url)
 
-            # Navigate to video page via Ember SPA routing.
-            # The nav links use href="#" so we can't click them directly.
-            # Instead, click the nav text to trigger Ember's routing.
-            video_nav = await page.query_selector('a:has-text("Video")')
-            if video_nav:
-                await video_nav.click(force=True)
-                logger.debug("Clicked Video nav link")
-                # Wait for the SPA route to transition
-                try:
-                    await page.wait_for_url("**/video**", timeout=10_000)
-                except Exception:
-                    logger.debug("URL didn't change to video, waiting for content")
-                await page.wait_for_load_state("networkidle", timeout=15_000)
-                # Give the Ember app time to render camera cards
-                await asyncio.sleep(5)
-            else:
-                # Fallback: navigate directly
-                logger.debug("No Video nav link found, navigating to %s", CAMERAS_URL)
-                await page.goto(CAMERAS_URL, wait_until="networkidle", timeout=30_000)
-                await asyncio.sleep(5)
+            # After auth, the Ember SPA needs time to make its initial API
+            # calls and render the dashboard.  If we rush into discovery
+            # the SPA may still be loading or in an error state.  Wait for
+            # the page to settle first.
+            await self._wait_for_spa_settled(page)
 
-            # If we're still not on /video, try direct navigation
-            if "/video" not in page.url:
-                logger.debug(
-                    "Not on video page (URL: %s), navigating directly", page.url
-                )
-                await page.goto(CAMERAS_URL, wait_until="networkidle", timeout=30_000)
-                await asyncio.sleep(5)
+            # Strategy 1: Try the internal API from the browser context.
+            # This works from ANY authenticated page — no navigation needed.
+            cameras = await self._discover_cameras_via_api(page)
 
-            # Debug: save a screenshot and dump the page structure
+            # Strategy 2: Navigate to the video page via SPA link clicking
+            # and scrape camera info from the rendered DOM.
+            # We MUST NOT use page.goto() or window.location — those are full
+            # page navigations that destroy the Ember SPA session.
+            if not cameras:
+                logger.debug("API discovery found no cameras, trying DOM discovery")
+
+                # If we're not already on the video page, navigate there
+                from urllib.parse import urlparse
+                current_path = urlparse(page.url).path.lower()
+                if "/video" not in current_path:
+                    logger.debug("Not on video page (%s), looking for Video nav link", current_path)
+
+                    # Log all links with "video" for debugging
+                    try:
+                        video_links = await page.evaluate("""
+                            () => Array.from(document.querySelectorAll('a')).filter(a => {
+                                const href = (a.getAttribute('href') || '').toLowerCase();
+                                const text = (a.textContent || '').trim().toLowerCase();
+                                return href.includes('video') || text === 'video';
+                            }).map(a => ({
+                                href: a.getAttribute('href'),
+                                text: a.textContent.trim().substring(0, 40),
+                                visible: a.offsetParent !== null,
+                                classes: a.className.toString().substring(0, 80),
+                                inEmber: !!a.closest('.ember-application, .ember-view')
+                            }))
+                        """)
+                        logger.info("Video-related links on page: %s", json.dumps(video_links, indent=2)[:3000])
+                    except Exception:
+                        pass
+
+                    # Click the SPA's Video nav link.
+                    # Alarm.com's Ember SPA uses href="#" on nav links — routing
+                    # is handled by Ember click handlers.  Use data-testid which
+                    # is stable across renders.
+                    video_link = await page.query_selector(
+                        'a[data-testid="video-link"]'
+                    )
+
+                    if video_link:
+                        link_info = await video_link.evaluate("""
+                            el => `<A href="${el.getAttribute('href')}" class="${el.className}" text="${el.textContent.trim().substring(0, 40)}">`
+                        """)
+                        logger.info("Clicking Video nav link: %s", link_info)
+                        await video_link.click()
+
+                        # Wait for the video page to render.  Don't use
+                        # networkidle (alarm.com analytics never settle).
+                        await self._wait_for_page_content(page, "video page", timeout=60)
+                        # Extra time for WebRTC players to initialize
+                        await asyncio.sleep(8)
+                    else:
+                        logger.warning("No Video nav link found in DOM — cannot navigate to video page")
+                else:
+                    logger.debug("Already on video page, waiting for players to render")
+                    await asyncio.sleep(3)
+
+                if _is_login_page(page.url):
+                    logger.warning("Session lost navigating to video (URL: %s)", page.url)
+                elif "/video" in page.url or "/video" in current_path:
+                    # Dump the full page state for debugging camera discovery
+                    await self._debug_page_state(page, "video_page_for_discovery")
+
+                    cameras = await self._discover_cameras_from_page(page)
+
+                    # Retry with longer wait if no cameras found (players may still be loading)
+                    if not cameras:
+                        logger.info("No cameras found yet, waiting 10s for WebRTC players to initialize...")
+                        await asyncio.sleep(10)
+                        cameras = await self._discover_cameras_from_page(page)
+
+            # Debug: save a screenshot
             try:
                 debug_dir = pathlib.Path(self._data_dir) / "debug"
                 debug_dir.mkdir(exist_ok=True)
                 await page.screenshot(
                     path=str(debug_dir / "cameras_page.png"), full_page=True
                 )
-                logger.debug("Saved cameras page screenshot")
-
-                page_info = await page.evaluate("""
-                    () => {
-                        const url = window.location.href;
-                        const title = document.title;
-                        // Dump the cameras section if it exists
-                        const cameraSec = document.querySelector('section.cameras, .cameras');
-                        const cameraHtml = cameraSec ? cameraSec.innerHTML.substring(0, 2000) : 'No cameras section found';
-                        // Dump all nav links
-                        const navLinks = Array.from(document.querySelectorAll('a[href]')).slice(0, 30).map(a =>
-                            `  <A href="${a.getAttribute('href')}">${a.textContent.trim().substring(0, 40)}`
-                        ).join('\\n');
-                        // Look for anything camera/video-related
-                        const allElements = document.querySelectorAll(
-                            '[class*="camera"], [class*="video"], [data-camera-id], ' +
-                            '[class*="device"], [class*="Camera"], [class*="Video"]'
-                        );
-                        const elemInfo = Array.from(allElements).slice(0, 20).map(e =>
-                            `  <${e.tagName} id="${e.id}" class="${e.className.toString().substring(0, 80)}"> children=${e.children.length}`
-                        ).join('\\n');
-                        return `URL: ${url}\\nTitle: ${title}\\n` +
-                               `Nav links:\\n${navLinks}\\n` +
-                               `Camera-related elements (${allElements.length}):\\n${elemInfo}\\n` +
-                               `Cameras section HTML:\\n${cameraHtml}`;
-                    }
-                """)
-                logger.debug("Cameras page info:\n%s", page_info[:5000])
+                logger.debug("Saved cameras page screenshot (URL: %s)", page.url)
             except Exception:
                 pass
-
-            # Try to extract camera data using multiple strategies.
-            # Strategy 1 (best): Scrape from WebRTC players / live view page
-            cameras = await self._discover_cameras_from_page(page)
-
-            # Strategy 2: Try the internal API from the browser context
-            if not cameras:
-                cameras = await self._discover_cameras_via_api(page)
-
-            # Strategy 3: DOM card-based discovery (camera list pages)
-            if not cameras:
-                camera_elements = await page.query_selector_all(
-                    '.video-camera-card, .camera-item, [class*="camera-card"], [data-camera-id]'
-                )
-                for i, elem in enumerate(camera_elements):
-                    cam_id = await elem.get_attribute("data-camera-id") or f"camera_{i}"
-                    name_elem = await elem.query_selector(SELECTORS["camera_name"])
-                    name = (
-                        await name_elem.inner_text() if name_elem else f"Camera {i + 1}"
-                    )
-                    cameras.append(
-                        CameraInfo(
-                            id=cam_id.strip(),
-                            name=name.strip(),
-                            url=page.url,
-                        )
-                    )
-                if cameras:
-                    logger.debug("DOM card discovery found %d cameras", len(cameras))
 
             self.state.cameras = cameras
             self.state.cameras_discovered_at = time.time()
@@ -1318,32 +1479,33 @@ class BrowserEngine:
     async def _discover_cameras_from_page(self, page: Page) -> list[CameraInfo]:
         """Scrape camera info from the live video page.
 
-        Extracts camera IDs from WebRTC player container IDs
-        (e.g. "webrtc-player_106711738-2048-container") and camera names
-        from .camera-description elements.
+        Tries multiple strategies:
+        A) WebRTC player container IDs (most reliable for camera IDs)
+        B) Video player elements with numeric IDs
+        C) Camera description/name elements (works even before video loads)
+        D) Camera group ID from the URL
         """
         cameras = []
         try:
             result = await page.evaluate("""
                 () => {
                     const cameras = [];
+                    const seenIds = new Set();
 
                     // Strategy A: Extract from WebRTC player container IDs
                     // Format: webrtc-player_<cameraId>-container
                     const players = document.querySelectorAll('[id*="webrtc-player"]');
                     players.forEach((el, i) => {
                         const id = el.id || '';
-                        // e.g. "webrtc-player_106711738-2048-container"
                         const match = id.match(/webrtc-player_([\\d-]+?)(?:-container)?$/);
-                        if (match) {
-                            // Find associated camera name
+                        if (match && !seenIds.has(match[1])) {
+                            seenIds.add(match[1]);
                             const playerParent = el.closest('.video-player, .live-video-player') || el.parentElement;
                             let name = '';
                             if (playerParent) {
                                 const nameEl = playerParent.querySelector('.camera-description, .bottom-bar-camera-name, .camera-name');
                                 if (nameEl) name = nameEl.textContent.trim();
                             }
-                            // Also check siblings/nearby elements
                             if (!name) {
                                 const desc = document.querySelector('.camera-description');
                                 if (desc) name = desc.textContent.trim();
@@ -1351,7 +1513,8 @@ class BrowserEngine:
                             cameras.push({
                                 id: match[1],
                                 name: name || 'Camera ' + (i + 1),
-                                url: window.location.href
+                                url: window.location.href,
+                                strategy: 'webrtc-player'
                             });
                         }
                     });
@@ -1360,7 +1523,6 @@ class BrowserEngine:
                     if (cameras.length === 0) {
                         const videoPlayers = document.querySelectorAll('.video-player, .live-video-player');
                         videoPlayers.forEach((el, i) => {
-                            // Try to find an ID in data attributes or child elements
                             const container = el.querySelector('[id*="player"]');
                             let camId = '';
                             if (container) {
@@ -1369,28 +1531,67 @@ class BrowserEngine:
                             }
                             const nameEl = el.querySelector('.camera-description, .camera-name');
                             const name = nameEl ? nameEl.textContent.trim() : '';
-                            if (camId) {
+                            if (camId && !seenIds.has(camId)) {
+                                seenIds.add(camId);
                                 cameras.push({
                                     id: camId,
                                     name: name || 'Camera ' + (i + 1),
-                                    url: window.location.href
+                                    url: window.location.href,
+                                    strategy: 'video-player'
                                 });
                             }
                         });
                     }
 
-                    // Strategy C: Extract camera group/ID from the URL
+                    // Strategy C: Camera description elements (works even before
+                    // WebRTC players have initialized — the camera cards/names
+                    // render first in the Ember template)
+                    if (cameras.length === 0) {
+                        const descElements = document.querySelectorAll(
+                            '.camera-description, .bottom-bar-camera-name, .camera-name, ' +
+                            '.video-camera-card, [class*="camera-card"], [data-camera-id]'
+                        );
+                        descElements.forEach((el, i) => {
+                            let camId = el.getAttribute('data-camera-id') || '';
+                            // Try to extract numeric ID from nearby elements
+                            if (!camId) {
+                                const parent = el.closest('[data-camera-id]');
+                                if (parent) camId = parent.getAttribute('data-camera-id');
+                            }
+                            // Try to find ID in any child element's ID attribute
+                            if (!camId) {
+                                const idElem = el.querySelector('[id*="player"], [id*="camera"]');
+                                if (idElem) {
+                                    const match = idElem.id.match(/(\\d{5,})/);
+                                    if (match) camId = match[1];
+                                }
+                            }
+                            const name = el.textContent.trim();
+                            if (!camId) camId = 'camera_' + i;
+                            if (name && !seenIds.has(camId)) {
+                                seenIds.add(camId);
+                                cameras.push({
+                                    id: camId,
+                                    name: name,
+                                    url: window.location.href,
+                                    strategy: 'camera-description'
+                                });
+                            }
+                        });
+                    }
+
+                    // Strategy D: Extract camera group/ID from the URL
                     if (cameras.length === 0) {
                         const url = window.location.href;
                         const groupMatch = url.match(/cameraGroupId=(\\d+)/);
                         if (groupMatch) {
-                            // There's at least one camera in this group
                             const desc = document.querySelector('.camera-description, .bottom-bar-camera-name');
                             const name = desc ? desc.textContent.trim() : 'Camera';
                             cameras.push({
                                 id: 'group_' + groupMatch[1],
                                 name: name,
-                                url: url
+                                url: url,
+                                strategy: 'url-group'
                             });
                         }
                     }
@@ -1416,7 +1617,8 @@ class BrowserEngine:
                             )
                         )
                 if cameras:
-                    logger.info("Page scrape found %d camera(s)", len(cameras))
+                    strategies = set(cam.get("strategy", "?") for cam in result)
+                    logger.info("Page scrape found %d camera(s) via %s", len(cameras), strategies)
 
         except Exception:
             logger.exception("Page-based camera discovery failed")
@@ -1426,8 +1628,9 @@ class BrowserEngine:
     # ---- Snapshot Capture ----
 
     async def _navigate_to_live_view(self, page: Page, camera: CameraInfo) -> bool:
-        """Navigate to a camera's live view, handling SPA routing.
+        """Navigate to a camera's live view via SPA link clicking.
 
+        NEVER uses page.goto() — that destroys the Ember SPA session.
         Returns True if the live view is showing video content.
         """
         current_url = page.url
@@ -1439,24 +1642,22 @@ class BrowserEngine:
                 logger.debug("Already on video page with player visible")
                 return True
 
-        # If camera has a stored URL (the live view page), navigate there
-        if camera.url and "/video" in camera.url:
-            logger.debug("Navigating to camera URL: %s", camera.url)
-            await page.goto(camera.url, wait_until="networkidle", timeout=30_000)
-            await asyncio.sleep(5)
-            video = await page.query_selector(SELECTORS["video_element"])
-            if video:
-                return True
-
-        # Otherwise, navigate via SPA - click Video in the nav
-        video_nav = await page.query_selector('a:has-text("Video")')
-        if video_nav:
-            await video_nav.click(force=True)
+        # Navigate via SPA — Ember uses href="#" on nav links with
+        # data-testid attributes for identification.
+        video_link = await page.query_selector(
+            'a[data-testid="video-link"]'
+        )
+        if video_link:
+            logger.debug("Clicking Video nav link for live view")
+            await video_link.click()
             try:
                 await page.wait_for_url("**/video**", timeout=10_000)
             except Exception:
                 pass
-            await page.wait_for_load_state("networkidle", timeout=15_000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=15_000)
+            except Exception:
+                pass
             await asyncio.sleep(5)
             video = await page.query_selector(SELECTORS["video_element"])
             if video:
@@ -1685,18 +1886,62 @@ class BrowserEngine:
     # ---- Session Check & Health ----
 
     async def check_session(self) -> bool:
-        """Quick check if the session is still valid."""
+        """Quick check if the session is still valid.
+
+        Does NOT navigate — uses the current page state and cookies to
+        determine if the session is alive.  Navigating (page.goto) would
+        destroy the Ember SPA context.
+        """
         if not self._context:
             return False
 
         try:
             page = await self._get_page()
-            await page.goto(f"{ALARM_BASE_URL}/web/system/home", timeout=15_000)
             url = page.url
+
+            # If we're on the login page, session is clearly expired
             if _is_login_page(url):
                 self.state.auth_status = AuthStatus.LOGGED_OUT
                 self.state.auth_message = "Session expired"
                 return False
+
+            # If we're on a /web/ path (not auth flow), session is likely valid
+            from urllib.parse import urlparse
+            path = urlparse(url).path.lower()
+            auth_flow_prefixes = (
+                "/web/system-install/",
+                "/web/two-factor",
+                "/web/login",
+            )
+            if path.startswith("/web/") and not any(path.startswith(p) for p in auth_flow_prefixes):
+                logger.debug("Session check: on /web/ path %s, session appears valid", path)
+                return True
+
+            # Use a lightweight fetch to check auth without navigating
+            try:
+                is_authed = await page.evaluate("""
+                    async () => {
+                        try {
+                            const resp = await fetch('/web/api/appload', {
+                                credentials: 'same-origin',
+                                headers: { 'Accept': 'application/json' }
+                            });
+                            // 401/403 = expired, 200 = valid, redirect to login = expired
+                            if (resp.redirected && resp.url.includes('/login')) return false;
+                            return resp.ok;
+                        } catch (e) {
+                            return false;
+                        }
+                    }
+                """)
+                if not is_authed:
+                    self.state.auth_status = AuthStatus.LOGGED_OUT
+                    self.state.auth_message = "Session expired"
+                    return False
+            except Exception:
+                # If evaluate fails, page might be in a bad state
+                logger.debug("Session check evaluate failed, assuming valid")
+                pass
             self.state.auth_status = AuthStatus.AUTHENTICATED
             return True
         except Exception:
@@ -1708,7 +1953,7 @@ class BrowserEngine:
             return False
         try:
             page = await self._get_page()
-            await page.evaluate("() => 1 + 1", timeout=5_000)
+            await page.evaluate("() => 1 + 1", timeout=30_000)
             return True
         except Exception:
             return False
