@@ -22,7 +22,7 @@ async def health_check(request: web.Request) -> web.Response:
     browser: BrowserEngine = request.app["browser"]
     health = browser.get_health()
     health["status"] = "ok"
-    health["version"] = "0.1.12"
+    health["version"] = "0.1.13"
     # Include config for the settings display
     config = request.app["config"]
     health["snapshot_interval"] = config["snapshot_interval"]
@@ -72,8 +72,30 @@ async def save_credentials(request: web.Request) -> web.Response:
 
 
 async def get_auth_status(request: web.Request) -> web.Response:
-    """Get current authentication status."""
+    """Get current authentication status.
+
+    If the state says 2FA/CAPTCHA but the browser has drifted back to the
+    login page (alarm.com expired the session), update the state immediately
+    so the UI reflects reality.
+    """
     browser: BrowserEngine = request.app["browser"]
+
+    auth_val = browser.state.auth_status.value
+    if auth_val in ("2fa_required", "captcha_required"):
+        # Use page.url (sync property) — don't call _get_page() or any async
+        # page methods that could interfere with an active auth flow.
+        try:
+            page = browser._page
+            if page and not page.is_closed():
+                from alarmdotcom_cameras.browser import _is_login_page
+                if _is_login_page(page.url):
+                    from alarmdotcom_cameras.browser import AuthStatus
+                    browser.state.auth_status = AuthStatus.LOGGED_OUT
+                    browser.state.auth_message = "Session expired. Please try again."
+                    browser.state.challenge_screenshot = None
+        except Exception:
+            pass
+
     return web.json_response(browser.get_auth_status())
 
 
@@ -365,6 +387,17 @@ async def get_debug_live(request: web.Request) -> web.Response:
             headers=no_cache,
         )
 
+    # If the browser lock is held (auth flow, snapshot, etc.), don't execute
+    # JS on the page — concurrent page.evaluate()/title()/screenshot() calls
+    # destroy the execution context and cause "no_session" redirects.
+    if browser._lock.locked():
+        return web.json_response(
+            {**base, "url": page.url, "title": "(locked — auth flow in progress)",
+             "dom_summary": "", "raw_html": "",
+             "error": "Browser lock held — skipping page access to avoid interference"},
+            headers=no_cache,
+        )
+
     try:
         url = page.url
         title = await asyncio.wait_for(page.title(), timeout=5)
@@ -504,6 +537,14 @@ async def get_debug_live_screenshot(request: web.Request) -> web.Response:
     if page is None or page.is_closed():
         return web.json_response(
             {"error": "No page open (browser idle)"}, status=503, headers=no_cache,
+        )
+
+    # Don't take a screenshot while the browser lock is held — it interferes
+    # with auth flow navigation and causes session loss.
+    if browser._lock.locked():
+        return web.json_response(
+            {"error": "Browser lock held — skipping screenshot to avoid interference"},
+            status=503, headers=no_cache,
         )
 
     try:

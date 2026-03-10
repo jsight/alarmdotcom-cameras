@@ -76,9 +76,46 @@ async def session_health_task(app: web.Application) -> None:
     while True:
         await asyncio.sleep(HEALTH_CHECK_INTERVAL)
         try:
+            # Don't interfere while login is actively running
+            auth_val = browser.state.auth_status.value
+            if auth_val == "logging_in":
+                logger.debug("Skipping health check: login in progress")
+                continue
+
+            # If state says 2FA/CAPTCHA but the browser has drifted back
+            # to the login page (session expired), reset state and re-login.
+            if auth_val in ("2fa_required", "captcha_required"):
+                try:
+                    page = await browser._get_page()
+                    from alarmdotcom_cameras.browser import _is_login_page
+                    if _is_login_page(page.url):
+                        logger.warning(
+                            "Auth state is %s but browser is on login page — "
+                            "session expired, re-logging in", auth_val
+                        )
+                        from alarmdotcom_cameras.browser import AuthStatus
+                        browser.state.auth_status = AuthStatus.LOGGED_OUT
+                        browser.state.challenge_screenshot = None
+                        creds = cred_store.load()
+                        if creds:
+                            await browser.login(creds["username"], creds["password"])
+                    else:
+                        logger.debug(
+                            "Skipping health check: auth flow in progress (%s)", auth_val
+                        )
+                except Exception:
+                    pass
+                continue
+
+            # Don't interfere while the lock is held (active browser operation)
+            if browser._lock.locked():
+                logger.debug("Skipping health check: browser lock held")
+                continue
+
             # Check if browser is responsive
             responsive = await browser.is_browser_responsive()
             if not responsive:
+                # Only restart if not in an interactive auth state
                 logger.warning("Browser unresponsive, restarting...")
                 await browser.restart()
                 # Re-login if we have credentials
@@ -88,7 +125,7 @@ async def session_health_task(app: web.Application) -> None:
                 continue
 
             # Check if session is still valid
-            if browser.state.auth_status.value == "authenticated":
+            if auth_val == "authenticated":
                 valid = await browser.check_session()
                 if not valid:
                     logger.warning("Session expired, attempting re-login...")

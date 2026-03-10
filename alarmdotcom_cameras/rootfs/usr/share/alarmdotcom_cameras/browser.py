@@ -142,6 +142,32 @@ class BrowserEngine:
 
         self._playwright = await async_playwright().start()
 
+        # Detect the actual Chromium version so we can build a matching UA.
+        # Playwright's default headless UA contains "HeadlessChrome" which is
+        # a bot-detection red flag.  We replace it with "Chrome".
+        _chrome_version = "131.0.6778.33"  # fallback
+        try:
+            _tmp_browser = await self._playwright.chromium.launch(
+                headless=True, args=["--no-sandbox"]
+            )
+            _tmp_page = await _tmp_browser.new_page()
+            _tmp_ua = await _tmp_page.evaluate("() => navigator.userAgent")
+            await _tmp_browser.close()
+            # Extract version from "HeadlessChrome/X.Y.Z.W" or "Chrome/X.Y.Z.W"
+            import re
+            m = re.search(r"(?:Headless)?Chrome/([\d.]+)", _tmp_ua)
+            if m:
+                _chrome_version = m.group(1)
+            logger.info("Detected Chromium version: %s", _chrome_version)
+        except Exception as exc:
+            logger.warning("Could not detect Chromium version: %s", exc)
+
+        _user_agent = (
+            f"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            f"(KHTML, like Gecko) Chrome/{_chrome_version} Safari/537.36"
+        )
+        logger.info("Using user agent: %s", _user_agent)
+
         # Use persistent context to preserve cookies/localStorage across restarts
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(self._browser_state_dir / "chromium_profile"),
@@ -160,13 +186,14 @@ class BrowserEngine:
                 # 'en-US@posix' in containers, which is a bot-detection
                 # red flag.  Force proper locale.
                 "--lang=en-US",
+                # Video/WebRTC support
+                "--autoplay-policy=no-user-gesture-required",
+                "--use-fake-ui-for-media-stream",
             ],
             locale="en-US",
+            timezone_id="America/New_York",
             viewport={"width": 1280, "height": 720},
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/131.0.6778.33 Safari/537.36"
-            ),
+            user_agent=_user_agent,
             ignore_https_errors=True,
         )
 
@@ -175,10 +202,9 @@ class BrowserEngine:
         # sessions that look automated.  These patches make the browser
         # look like a normal desktop Chrome installation.
         await self._context.add_init_script("""
-            // Remove webdriver flag
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
+            // Remove webdriver flag — delete it entirely so
+            // 'webdriver' in navigator returns false
+            delete Object.getPrototypeOf(navigator).webdriver;
 
             // Fix navigator.languages (container shows ['en-US@posix'])
             Object.defineProperty(navigator, 'languages', {
@@ -230,10 +256,138 @@ class BrowserEngine:
                 }
                 return origQuery(params);
             };
+
+            // Fix window.outerWidth/outerHeight (0 in headless = dead giveaway)
+            if (window.outerWidth === 0) {
+                Object.defineProperty(window, 'outerWidth', { get: () => window.innerWidth });
+            }
+            if (window.outerHeight === 0) {
+                Object.defineProperty(window, 'outerHeight', { get: () => window.innerHeight + 85 });
+            }
+
+            // Fix screen properties (headless may have inconsistent values)
+            if (screen.availWidth === 0 || screen.width === 0) {
+                Object.defineProperty(screen, 'width', { get: () => 1920 });
+                Object.defineProperty(screen, 'height', { get: () => 1080 });
+                Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+                Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
+                Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+                Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
+            }
+
+            // Override WebGL renderer to hide SwiftShader (headless GPU emulator)
+            const origGetParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(param) {
+                // UNMASKED_VENDOR_WEBGL = 0x9245, UNMASKED_RENDERER_WEBGL = 0x9246
+                if (param === 0x9245) return 'Google Inc. (Intel)';
+                if (param === 0x9246) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
+                return origGetParameter.call(this, param);
+            };
+            // Also patch WebGL2
+            if (typeof WebGL2RenderingContext !== 'undefined') {
+                const origGetParameter2 = WebGL2RenderingContext.prototype.getParameter;
+                WebGL2RenderingContext.prototype.getParameter = function(param) {
+                    if (param === 0x9245) return 'Google Inc. (Intel)';
+                    if (param === 0x9246) return 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630, OpenGL 4.6)';
+                    return origGetParameter2.call(this, param);
+                };
+            }
         """)
+
 
         self.state.browser_alive = True
         logger.info("Browser engine started")
+
+        # Run fingerprint diagnostic — log all the signals bot detectors check
+        # so we can compare container vs non-container.
+        await self._log_fingerprint_diagnostic()
+
+    async def _log_fingerprint_diagnostic(self) -> None:
+        """Log browser fingerprint signals for debugging bot detection."""
+        try:
+            page = await self._get_page()
+            # Navigate to a blank page to run diagnostics
+            await page.goto("about:blank")
+            fp = await page.evaluate("""() => {
+                const r = {};
+                r.userAgent = navigator.userAgent;
+                r.platform = navigator.platform;
+                r.languages = JSON.stringify(navigator.languages);
+                r.language = navigator.language;
+                r.hardwareConcurrency = navigator.hardwareConcurrency;
+                r.deviceMemory = navigator.deviceMemory;
+                r.maxTouchPoints = navigator.maxTouchPoints;
+                r.webdriver = navigator.webdriver;
+                r.vendor = navigator.vendor;
+                r.productSub = navigator.productSub;
+
+                // Screen
+                r.screenWidth = screen.width;
+                r.screenHeight = screen.height;
+                r.screenAvailWidth = screen.availWidth;
+                r.screenAvailHeight = screen.availHeight;
+                r.screenColorDepth = screen.colorDepth;
+                r.screenPixelDepth = screen.pixelDepth;
+                r.outerWidth = window.outerWidth;
+                r.outerHeight = window.outerHeight;
+                r.innerWidth = window.innerWidth;
+                r.innerHeight = window.innerHeight;
+                r.devicePixelRatio = window.devicePixelRatio;
+
+                // Timezone
+                r.timezoneOffset = new Date().getTimezoneOffset();
+                r.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+                // Chrome object
+                r.hasChrome = !!window.chrome;
+                r.chromeKeys = window.chrome ? Object.keys(window.chrome).join(',') : 'N/A';
+
+                // Plugins
+                r.pluginCount = navigator.plugins ? navigator.plugins.length : 0;
+                r.pluginNames = navigator.plugins ?
+                    Array.from(navigator.plugins).map(p => p.name).join(', ') : 'N/A';
+
+                // WebGL
+                try {
+                    const canvas = document.createElement('canvas');
+                    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                    if (gl) {
+                        const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+                        r.webglVendor = debugInfo ? gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL) : 'N/A';
+                        r.webglRenderer = debugInfo ? gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) : 'N/A';
+                    } else {
+                        r.webglVendor = 'no WebGL';
+                        r.webglRenderer = 'no WebGL';
+                    }
+                } catch(e) {
+                    r.webglVendor = 'error: ' + e.message;
+                    r.webglRenderer = 'error: ' + e.message;
+                }
+
+                // Connection
+                r.connectionType = navigator.connection ?
+                    navigator.connection.effectiveType : 'N/A';
+                r.connectionDownlink = navigator.connection ?
+                    navigator.connection.downlink : 'N/A';
+
+                // Permissions
+                r.permissions = 'checking...';
+
+                // Automation signals
+                r.webdriver_prop = 'webdriver' in navigator;
+                r.webdriver_val = navigator.webdriver;
+                r.automationControlled = !!(window.cdc_adoQpoasnfa76pfcZLmcfl_Array ||
+                    window.cdc_adoQpoasnfa76pfcZLmcfl_Promise ||
+                    document.$cdc_asdjflasutopfhvcZLmcfl_);
+
+                return r;
+            }""")
+            logger.info("=== BROWSER FINGERPRINT DIAGNOSTIC ===")
+            for key, val in fp.items():
+                logger.info("  FP: %s = %s", key, val)
+            logger.info("=== END FINGERPRINT DIAGNOSTIC ===")
+        except Exception as exc:
+            logger.warning("Fingerprint diagnostic failed: %s", exc)
 
     async def restart(self) -> None:
         """Restart the browser after a crash or error."""
@@ -390,6 +544,11 @@ class BrowserEngine:
 
     async def login(self, username: str, password: str) -> AuthStatus:
         """Attempt to log into alarm.com."""
+        async with self._lock:
+            return await self._login_impl(username, password)
+
+    async def _login_impl(self, username: str, password: str) -> AuthStatus:
+        """Login implementation (must be called with self._lock held)."""
         self.state.auth_status = AuthStatus.LOGGING_IN
         self.state.auth_message = "Logging in..."
         self.state.challenge_screenshot = None
@@ -984,6 +1143,11 @@ class BrowserEngine:
 
     async def solve_challenge(self, solution: str) -> AuthStatus:
         """Submit a CAPTCHA solution or 2FA code."""
+        async with self._lock:
+            return await self._solve_challenge_impl(solution)
+
+    async def _solve_challenge_impl(self, solution: str) -> AuthStatus:
+        """Solve challenge implementation (must be called with self._lock held)."""
         page = await self._get_page()
 
         try:
@@ -1189,6 +1353,11 @@ class BrowserEngine:
         if self.state.auth_status != AuthStatus.TWO_FA_REQUIRED:
             return {"success": False, "error": "Not in 2FA state"}
 
+        async with self._lock:
+            return await self._resend_2fa_code_impl()
+
+    async def _resend_2fa_code_impl(self) -> dict:
+        """Resend 2FA code implementation (must be called with self._lock held)."""
         page = await self._get_page()
 
         try:
@@ -1641,6 +1810,11 @@ class BrowserEngine:
             if video:
                 logger.debug("Already on video page with player visible")
                 return True
+            # Check for video error with Retry button
+            await self._retry_video_player(page)
+            video = await page.query_selector(SELECTORS["video_element"])
+            if video:
+                return True
 
         # Navigate via SPA — Ember uses href="#" on nav links with
         # data-testid attributes for identification.
@@ -1650,21 +1824,41 @@ class BrowserEngine:
         if video_link:
             logger.debug("Clicking Video nav link for live view")
             await video_link.click()
-            try:
-                await page.wait_for_url("**/video**", timeout=10_000)
-            except Exception:
-                pass
-            try:
-                await page.wait_for_load_state("networkidle", timeout=15_000)
-            except Exception:
-                pass
+            await self._wait_for_page_content(page, "video nav", timeout=30)
             await asyncio.sleep(5)
+
+            # Check for video player error and retry if needed
+            await self._retry_video_player(page)
+
             video = await page.query_selector(SELECTORS["video_element"])
             if video:
                 return True
 
         logger.warning("Could not navigate to live view for camera %s", camera.id)
         return False
+
+    async def _retry_video_player(self, page: Page) -> None:
+        """Click the Retry button if the video player shows an error."""
+        for attempt in range(3):
+            try:
+                retry_btn = await page.query_selector(
+                    'button:has-text("Retry"), '
+                    'button:has-text("RETRY"), '
+                    '.video-player button.btn-color-primary'
+                )
+                if not retry_btn:
+                    return
+                logger.info("Video player error detected, clicking Retry (attempt %d)", attempt + 1)
+                await retry_btn.click()
+                await asyncio.sleep(8)
+                # Check if video loaded after retry
+                video = await page.query_selector(SELECTORS["video_element"])
+                if video:
+                    logger.info("Video loaded after retry")
+                    return
+            except Exception as exc:
+                logger.debug("Video retry failed: %s", exc)
+                return
 
     async def capture_snapshot(self, camera_id: str) -> bytes | None:
         """Navigate to a camera's live view and capture a screenshot.
