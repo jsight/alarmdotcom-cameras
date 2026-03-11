@@ -1,6 +1,5 @@
 """Camera platform for Alarm.com Cameras integration."""
 
-import asyncio
 import logging
 from datetime import timedelta
 
@@ -13,8 +12,9 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_interval
 
-from .const import DOMAIN, SCAN_INTERVAL
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -22,10 +22,9 @@ PARALLEL_UPDATES = 1
 
 SERVICE_CAPTURE_SNAPSHOT = "capture_snapshot"
 
-# Retry camera discovery a few times at startup since the addon may not
-# have finished discovering cameras yet when the integration loads.
-_INITIAL_RETRY_DELAY = 15  # seconds
-_INITIAL_RETRY_COUNT = 4
+# How often to poll the addon for new cameras (seconds).
+# Kept short so cameras appear quickly after addon finishes discovery.
+_DISCOVERY_INTERVAL = 30
 
 
 async def async_setup_entry(
@@ -42,31 +41,8 @@ async def async_setup_entry(
     entities: list[AlarmDotComCamera] = []
     entry_data["entities"] = entities
 
-    # Discover cameras from the add-on, retrying if the addon isn't ready yet
+    # Try to discover cameras now (single, non-blocking attempt)
     cameras = await _fetch_cameras(session, resolver.url)
-
-    if not cameras:
-        _LOGGER.info(
-            "No cameras found yet at %s, will retry %d times",
-            resolver.url,
-            _INITIAL_RETRY_COUNT,
-        )
-        for attempt in range(_INITIAL_RETRY_COUNT):
-            await asyncio.sleep(_INITIAL_RETRY_DELAY)
-            await resolver.resolve()
-            cameras = await _fetch_cameras(session, resolver.url)
-            if cameras:
-                _LOGGER.info(
-                    "Found %d camera(s) on retry %d", len(cameras), attempt + 1
-                )
-                break
-            _LOGGER.debug(
-                "Retry %d/%d: still no cameras at %s",
-                attempt + 1,
-                _INITIAL_RETRY_COUNT,
-                resolver.url,
-            )
-
     if cameras:
         new_entities = _make_entities(entry, resolver, cameras, session, set())
         async_add_entities(new_entities, update_before_add=True)
@@ -74,7 +50,9 @@ async def async_setup_entry(
         _LOGGER.info("Added %d Alarm.com camera entities", len(new_entities))
     else:
         _LOGGER.warning(
-            "No cameras found from the add-on at %s after retries", resolver.url
+            "No cameras found yet at %s — will keep polling every %ds",
+            resolver.url,
+            _DISCOVERY_INTERVAL,
         )
 
     # Register the capture_snapshot service (once per domain)
@@ -86,7 +64,6 @@ async def async_setup_entry(
             if isinstance(entity_ids, str):
                 entity_ids = [entity_ids]
 
-            # Find matching camera entities across all config entries
             for eid in hass.data.get(DOMAIN, {}):
                 for entity in hass.data[DOMAIN][eid].get("entities", []):
                     if not entity_ids or entity.entity_id in entity_ids:
@@ -105,22 +82,26 @@ async def async_setup_entry(
             ),
         )
 
-    # Schedule periodic re-discovery to pick up new cameras
+    # Periodic discovery — picks up cameras that weren't ready at startup
+    # and detects newly added cameras.
     async def _periodic_discovery(_now=None):
-        await resolver.resolve()
-        new_cameras = await _fetch_cameras(session, resolver.url)
-        existing_ids = {e.camera_id for e in entities}
-        new_entities = _make_entities(
-            entry, resolver, new_cameras, session, existing_ids
-        )
-        if new_entities:
-            async_add_entities(new_entities, update_before_add=True)
-            entities.extend(new_entities)
-            _LOGGER.info("Discovered %d new camera(s)", len(new_entities))
+        try:
+            await resolver.resolve()
+            new_cameras = await _fetch_cameras(session, resolver.url)
+            existing_ids = {e.camera_id for e in entities}
+            new_entities = _make_entities(
+                entry, resolver, new_cameras, session, existing_ids
+            )
+            if new_entities:
+                async_add_entities(new_entities, update_before_add=True)
+                entities.extend(new_entities)
+                _LOGGER.info("Discovered %d new camera(s)", len(new_entities))
+        except Exception:
+            _LOGGER.exception("Error during camera discovery")
 
     entry.async_on_unload(
-        hass.helpers.event.async_track_time_interval(
-            _periodic_discovery, timedelta(seconds=SCAN_INTERVAL)
+        async_track_time_interval(
+            hass, _periodic_discovery, timedelta(seconds=_DISCOVERY_INTERVAL)
         )
     )
 
