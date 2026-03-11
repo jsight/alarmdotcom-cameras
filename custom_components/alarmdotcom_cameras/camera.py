@@ -6,7 +6,7 @@ from datetime import timedelta
 import aiohttp
 import voluptuous as vol
 
-from homeassistant.components.camera import Camera
+from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
@@ -151,6 +151,7 @@ class AlarmDotComCamera(Camera):
     """Representation of an Alarm.com camera."""
 
     _attr_has_entity_name = True
+    _attr_supported_features = CameraEntityFeature.ON_OFF
 
     def __init__(
         self,
