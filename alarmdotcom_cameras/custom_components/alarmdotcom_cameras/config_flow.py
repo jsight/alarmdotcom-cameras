@@ -5,9 +5,7 @@ import logging
 import aiohttp
 import voluptuous as vol
 
-from homeassistant.components.hassio import is_hassio
-from homeassistant.config_entries import ConfigFlow
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 
 from .const import CONF_ADDON_URL, DEFAULT_ADDON_URL, DOMAIN
 
@@ -38,7 +36,7 @@ class AlarmDotComCamerasConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 1
 
-    async def async_step_user(self, user_input: dict | None = None) -> FlowResult:
+    async def async_step_user(self, user_input: dict | None = None) -> ConfigFlowResult:
         """Handle the initial step."""
         errors = {}
 
@@ -54,14 +52,14 @@ class AlarmDotComCamerasConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             errors["base"] = "cannot_connect"
 
-        # Auto-detect the add-on URL
+        # Auto-detect the add-on URL — try Supervisor hostname alias first,
+        # then fall back to localhost.  No need to check is_hassio(); just
+        # probe both URLs (the one that responds wins).
         suggested_url = DEFAULT_ADDON_URL
-        if is_hassio(self.hass):
-            # Try the Supervisor hostname alias first (works for HA OS / Supervised)
-            if await _test_addon_url(ADDON_HOSTNAME_URL):
-                suggested_url = ADDON_HOSTNAME_URL
-            elif await _test_addon_url(DEFAULT_ADDON_URL):
-                suggested_url = DEFAULT_ADDON_URL
+        if await _test_addon_url(ADDON_HOSTNAME_URL):
+            suggested_url = ADDON_HOSTNAME_URL
+        elif await _test_addon_url(DEFAULT_ADDON_URL):
+            suggested_url = DEFAULT_ADDON_URL
 
         return self.async_show_form(
             step_id="user",
