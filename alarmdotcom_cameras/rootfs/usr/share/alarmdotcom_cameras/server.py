@@ -5,7 +5,6 @@ import asyncio
 import collections
 import logging
 import pathlib
-import time
 
 from aiohttp import web
 
