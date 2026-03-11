@@ -1,5 +1,6 @@
 """Camera platform for Alarm.com Cameras integration."""
 
+import asyncio
 import logging
 from datetime import timedelta
 
@@ -21,6 +22,11 @@ PARALLEL_UPDATES = 1
 
 SERVICE_CAPTURE_SNAPSHOT = "capture_snapshot"
 
+# Retry camera discovery a few times at startup since the addon may not
+# have finished discovering cameras yet when the integration loads.
+_INITIAL_RETRY_DELAY = 15  # seconds
+_INITIAL_RETRY_COUNT = 4
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -32,29 +38,44 @@ async def async_setup_entry(
     resolver = entry_data["resolver"]
     session = async_get_clientsession(hass)
 
-    # Discover cameras from the add-on
+    # Track all entities we've created so periodic discovery can add new ones
+    entities: list[AlarmDotComCamera] = []
+    entry_data["entities"] = entities
+
+    # Discover cameras from the add-on, retrying if the addon isn't ready yet
     cameras = await _fetch_cameras(session, resolver.url)
 
-    entities = [
-        AlarmDotComCamera(
-            entry=entry,
-            resolver=resolver,
-            camera_id=cam["id"],
-            camera_name=cam["name"],
-            camera_model=cam.get("model", ""),
-            session=session,
+    if not cameras:
+        _LOGGER.info(
+            "No cameras found yet at %s, will retry %d times",
+            resolver.url,
+            _INITIAL_RETRY_COUNT,
         )
-        for cam in cameras
-    ]
+        for attempt in range(_INITIAL_RETRY_COUNT):
+            await asyncio.sleep(_INITIAL_RETRY_DELAY)
+            await resolver.resolve()
+            cameras = await _fetch_cameras(session, resolver.url)
+            if cameras:
+                _LOGGER.info(
+                    "Found %d camera(s) on retry %d", len(cameras), attempt + 1
+                )
+                break
+            _LOGGER.debug(
+                "Retry %d/%d: still no cameras at %s",
+                attempt + 1,
+                _INITIAL_RETRY_COUNT,
+                resolver.url,
+            )
 
-    if entities:
-        async_add_entities(entities, update_before_add=True)
-        _LOGGER.info("Added %d Alarm.com camera entities", len(entities))
+    if cameras:
+        new_entities = _make_entities(entry, resolver, cameras, session, set())
+        async_add_entities(new_entities, update_before_add=True)
+        entities.extend(new_entities)
+        _LOGGER.info("Added %d Alarm.com camera entities", len(new_entities))
     else:
-        _LOGGER.warning("No cameras found from the add-on at %s", resolver.url)
-
-    # Store entities for service calls
-    entry_data["entities"] = entities
+        _LOGGER.warning(
+            "No cameras found from the add-on at %s after retries", resolver.url
+        )
 
     # Register the capture_snapshot service (once per domain)
     if not hass.services.has_service(DOMAIN, SERVICE_CAPTURE_SNAPSHOT):
@@ -86,22 +107,12 @@ async def async_setup_entry(
 
     # Schedule periodic re-discovery to pick up new cameras
     async def _periodic_discovery(_now=None):
-        # Re-resolve URL in case addon IP changed
         await resolver.resolve()
         new_cameras = await _fetch_cameras(session, resolver.url)
         existing_ids = {e.camera_id for e in entities}
-        new_entities = [
-            AlarmDotComCamera(
-                entry=entry,
-                resolver=resolver,
-                camera_id=cam["id"],
-                camera_name=cam["name"],
-                camera_model=cam.get("model", ""),
-                session=session,
-            )
-            for cam in new_cameras
-            if cam["id"] not in existing_ids
-        ]
+        new_entities = _make_entities(
+            entry, resolver, new_cameras, session, existing_ids
+        )
         if new_entities:
             async_add_entities(new_entities, update_before_add=True)
             entities.extend(new_entities)
@@ -114,18 +125,44 @@ async def async_setup_entry(
     )
 
 
+def _make_entities(
+    entry: ConfigEntry,
+    resolver,
+    cameras: list[dict],
+    session: aiohttp.ClientSession,
+    existing_ids: set[str],
+) -> list["AlarmDotComCamera"]:
+    """Create camera entity objects for cameras not already tracked."""
+    return [
+        AlarmDotComCamera(
+            entry=entry,
+            resolver=resolver,
+            camera_id=cam["id"],
+            camera_name=cam["name"],
+            camera_model=cam.get("model", ""),
+            session=session,
+        )
+        for cam in cameras
+        if cam["id"] not in existing_ids
+    ]
+
+
 async def _fetch_cameras(session: aiohttp.ClientSession, addon_url: str) -> list[dict]:
     """Fetch camera list from the add-on API."""
+    url = f"{addon_url}/api/cameras"
     try:
         async with session.get(
-            f"{addon_url}/api/cameras",
+            url,
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                return data.get("cameras", [])
+                cameras = data.get("cameras", [])
+                _LOGGER.debug("Fetched %d camera(s) from %s", len(cameras), url)
+                return cameras
+            _LOGGER.warning("Unexpected status %d from %s", resp.status, url)
     except Exception:
-        _LOGGER.exception("Failed to fetch cameras from add-on")
+        _LOGGER.exception("Failed to fetch cameras from %s", url)
     return []
 
 
