@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.20
+
+### Fixed - Camera entities not appearing
+
+- **Fix camera entity creation** — the camera platform setup was blocking
+  for up to 60s with a retry loop, causing HA to cancel the setup
+  coroutine before periodic discovery was registered
+- **Fix deprecated HA timer API** — use properly imported
+  `async_track_time_interval` instead of deprecated `hass.helpers.event`
+  proxy which silently failed in modern HA
+- **30-second discovery polling** — cameras are now discovered via a
+  non-blocking 30s polling interval, so entities appear quickly even if
+  the addon isn't ready at startup
+- **Ruff formatting** — all Python files now pass `ruff format --check`
+
 ## 0.1.19
 
 ### Added - Diagnostic entities and improved URL discovery
