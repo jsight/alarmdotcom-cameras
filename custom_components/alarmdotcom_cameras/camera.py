@@ -4,10 +4,12 @@ import logging
 from datetime import timedelta
 
 import aiohttp
+import voluptuous as vol
 
 from homeassistant.components.camera import Camera
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -16,6 +18,8 @@ from .const import DOMAIN, SCAN_INTERVAL
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 1
+
+SERVICE_CAPTURE_SNAPSHOT = "capture_snapshot"
 
 
 async def async_setup_entry(
@@ -48,6 +52,37 @@ async def async_setup_entry(
         _LOGGER.info("Added %d Alarm.com camera entities", len(entities))
     else:
         _LOGGER.warning("No cameras found from the add-on at %s", resolver.url)
+
+    # Store entities for service calls
+    entry_data["entities"] = entities
+
+    # Register the capture_snapshot service (once per domain)
+    if not hass.services.has_service(DOMAIN, SERVICE_CAPTURE_SNAPSHOT):
+
+        async def handle_capture_snapshot(call: ServiceCall) -> None:
+            """Handle the capture_snapshot service call."""
+            entity_ids = call.data.get("entity_id", [])
+            if isinstance(entity_ids, str):
+                entity_ids = [entity_ids]
+
+            # Find matching camera entities across all config entries
+            for eid in hass.data.get(DOMAIN, {}):
+                for entity in hass.data[DOMAIN][eid].get("entities", []):
+                    if not entity_ids or entity.entity_id in entity_ids:
+                        await entity.async_capture_snapshot()
+
+        hass.services.async_register(
+            DOMAIN,
+            SERVICE_CAPTURE_SNAPSHOT,
+            handle_capture_snapshot,
+            schema=vol.Schema(
+                {
+                    vol.Optional("entity_id"): vol.Any(
+                        cv.entity_id, vol.All(cv.ensure_list, [cv.entity_id])
+                    ),
+                }
+            ),
+        )
 
     # Schedule periodic re-discovery to pick up new cameras
     async def _periodic_discovery(_now=None):
@@ -161,8 +196,14 @@ class AlarmDotComCamera(Camera):
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
-        """Return the latest snapshot image."""
+        """Return the latest snapshot image.
+
+        First tries the cached snapshot from the addon. If no cached
+        snapshot exists (404), triggers an on-demand capture so the
+        camera entity always shows an image when possible.
+        """
         try:
+            # Try cached snapshot first (fast)
             async with self._session.get(
                 f"{self._addon_url}/api/snapshot/{self._camera_id}",
                 timeout=aiohttp.ClientTimeout(total=10),
@@ -171,12 +212,54 @@ class AlarmDotComCamera(Camera):
                     self._last_image = await resp.read()
                     await self._update_metadata()
                     return self._last_image
+
+                if resp.status == 404:
+                    # No cached snapshot — trigger a capture
+                    _LOGGER.info(
+                        "No cached snapshot for %s, triggering capture",
+                        self._camera_id,
+                    )
+                    return await self._do_capture()
+
         except Exception:
-            _LOGGER.debug("Failed to fetch snapshot for %s, re-resolving URL", self._camera_id)
-            # Connection failed — try to re-resolve the addon URL
+            _LOGGER.debug(
+                "Failed to fetch snapshot for %s, re-resolving URL",
+                self._camera_id,
+            )
             await self._resolver.resolve()
 
         return self._last_image
+
+    async def _do_capture(self) -> bytes | None:
+        """Trigger an on-demand snapshot capture from the addon."""
+        try:
+            async with self._session.post(
+                f"{self._addon_url}/api/snapshot/{self._camera_id}/capture",
+                timeout=aiohttp.ClientTimeout(total=60),
+            ) as resp:
+                if resp.status == 200:
+                    self._last_image = await resp.read()
+                    await self._update_metadata()
+                    _LOGGER.info(
+                        "On-demand snapshot captured for %s (%d bytes)",
+                        self._camera_id,
+                        len(self._last_image),
+                    )
+                    return self._last_image
+                _LOGGER.warning(
+                    "Capture returned status %d for %s", resp.status, self._camera_id
+                )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to capture snapshot for %s", self._camera_id
+            )
+        return self._last_image
+
+    async def async_capture_snapshot(self) -> None:
+        """Service call: trigger a fresh snapshot capture."""
+        image = await self._do_capture()
+        if image:
+            self.async_write_ha_state()
 
     async def _update_metadata(self) -> None:
         """Update snapshot metadata from the add-on."""
@@ -197,19 +280,8 @@ class AlarmDotComCamera(Camera):
         return self._attr_is_streaming
 
     async def async_turn_on(self) -> None:
-        """Start live stream (trigger snapshot capture)."""
-        try:
-            async with self._session.post(
-                f"{self._addon_url}/api/snapshot/{self._camera_id}/capture",
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    self._last_image = await resp.read()
-                    _LOGGER.info("On-demand snapshot captured for %s", self._camera_id)
-        except Exception:
-            _LOGGER.exception(
-                "Failed to capture on-demand snapshot for %s", self._camera_id
-            )
+        """Trigger an on-demand snapshot capture."""
+        await self.async_capture_snapshot()
 
     async def async_turn_off(self) -> None:
         """Stop streaming."""

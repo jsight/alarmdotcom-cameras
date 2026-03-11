@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.18
+
+### Added - Camera snapshots and capture service
+
+- **Auto-capture on first view** — if no cached snapshot exists, the camera
+  entity automatically triggers an on-demand capture so it always shows an
+  image when possible
+- **`alarmdotcom_cameras.capture_snapshot` service** — trigger a fresh
+  snapshot capture from HA automations, scripts, or the Developer Tools
+  service call UI
+- **`async_turn_on`** now triggers a snapshot capture (useful from the
+  camera card's "turn on" button)
+
 ## 0.1.17
 
 ### Fixed - HA companion integration

@@ -1,0 +1,12 @@
+capture_snapshot:
+  name: Capture Snapshot
+  description: Trigger a fresh snapshot capture from an Alarm.com camera.
+  fields:
+    entity_id:
+      name: Camera Entity
+      description: The camera entity to capture a snapshot from. Leave empty to capture all cameras.
+      required: false
+      selector:
+        entity:
+          integration: alarmdotcom_cameras
+          domain: camera
