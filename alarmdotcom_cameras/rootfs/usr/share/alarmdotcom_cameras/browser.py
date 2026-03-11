@@ -33,6 +33,7 @@ def _is_login_page(url: str) -> bool:
     path = urlparse(url).path.rstrip("/").lower()
     return path == "/login"
 
+
 # Selectors for alarm.com pages (may need adjustment based on actual DOM)
 SELECTORS = {
     # Login page
@@ -105,7 +106,8 @@ class BrowserState:
     startup_time: float = field(default_factory=time.time)
     browser_alive: bool = False
     console_logs: collections.deque = field(
-        default_factory=lambda: collections.deque(maxlen=200), repr=False,
+        default_factory=lambda: collections.deque(maxlen=200),
+        repr=False,
     )
     _stream_stop_event: asyncio.Event | None = field(default=None, repr=False)
 
@@ -155,6 +157,7 @@ class BrowserEngine:
             await _tmp_browser.close()
             # Extract version from "HeadlessChrome/X.Y.Z.W" or "Chrome/X.Y.Z.W"
             import re
+
             m = re.search(r"(?:Headless)?Chrome/([\d.]+)", _tmp_ua)
             if m:
                 _chrome_version = m.group(1)
@@ -294,7 +297,6 @@ class BrowserEngine:
             }
         """)
 
-
         self.state.browser_alive = True
         logger.info("Browser engine started")
 
@@ -413,12 +415,15 @@ class BrowserEngine:
 
     def _attach_console_listeners(self, page: Page) -> None:
         """Attach console and error listeners to capture browser output."""
+
         def on_console(msg):
             entry = {
                 "time": time.time(),
                 "type": msg.type,
                 "text": msg.text,
-                "url": msg.location.get("url", "") if hasattr(msg, "location") and msg.location else "",
+                "url": msg.location.get("url", "")
+                if hasattr(msg, "location") and msg.location
+                else "",
             }
             self.state.console_logs.append(entry)
 
@@ -611,7 +616,9 @@ class BrowserEngine:
                 if cur_url != pre_login_url:
                     logger.info(
                         "Login page navigated after %ds: %s -> %s",
-                        (i + 1) * 2, pre_login_url, cur_url,
+                        (i + 1) * 2,
+                        pre_login_url,
+                        cur_url,
                     )
                     break
                 # Also check if the login form itself disappeared (SPA transition)
@@ -628,7 +635,9 @@ class BrowserEngine:
                 except Exception:
                     break  # page context destroyed = navigation happened
                 if i % 15 == 14:
-                    logger.info("Still waiting for login navigation (%ds)...", (i + 1) * 2)
+                    logger.info(
+                        "Still waiting for login navigation (%ds)...", (i + 1) * 2
+                    )
             else:
                 logger.warning("Login page did not navigate after 180s")
 
@@ -706,9 +715,7 @@ class BrowserEngine:
             "/web/login",
         )
         if any(path.startswith(prefix) for prefix in auth_flow_prefixes):
-            logger.debug(
-                "_check_logged_in: on auth flow path %s, NOT logged in", path
-            )
+            logger.debug("_check_logged_in: on auth flow path %s, NOT logged in", path)
             return False
 
         # If on a /web/ path (but not auth flow), check for dashboard indicators
@@ -727,8 +734,13 @@ class BrowserEngine:
                         "() => document.body ? document.body.innerText.substring(0, 500) : ''"
                     )
                     # If page has logout/sign-out links, we're likely logged in
-                    if any(kw in page_text.lower() for kw in ("log out", "sign out", "dashboard")):
-                        logger.debug("_check_logged_in: found auth keywords on %s", path)
+                    if any(
+                        kw in page_text.lower()
+                        for kw in ("log out", "sign out", "dashboard")
+                    ):
+                        logger.debug(
+                            "_check_logged_in: found auth keywords on %s", path
+                        )
                         return True
                 except Exception:
                     pass
@@ -744,7 +756,9 @@ class BrowserEngine:
             )
             return True
         except Exception:
-            logger.debug("_check_logged_in: not on /web/ path and no indicator, NOT logged in")
+            logger.debug(
+                "_check_logged_in: not on /web/ path and no indicator, NOT logged in"
+            )
             return False
 
     async def _dismiss_cookie_banner(self, page: Page) -> None:
@@ -752,8 +766,8 @@ class BrowserEngine:
         try:
             # alarm.com uses <input type="submit" id="acceptCookies"> not <button>
             accept_btn = await page.query_selector(
-                '#acceptCookies, '
-                '#onetrust-accept-btn-handler, '
+                "#acceptCookies, "
+                "#onetrust-accept-btn-handler, "
                 'input[value="Accept all cookies" i], '
                 'button:has-text("Accept all Cookies"), '
                 'button:has-text("Accept All Cookies"), '
@@ -819,7 +833,9 @@ class BrowserEngine:
 
         logger.debug("SPA settled, URL: %s", page.url)
 
-    async def _wait_for_page_content(self, page: Page, label: str, timeout: int = 90) -> bool:
+    async def _wait_for_page_content(
+        self, page: Page, label: str, timeout: int = 90
+    ) -> bool:
         """Wait for the page to have meaningful DOM content.
 
         Polls every 2 seconds for up to `timeout` seconds. Returns True if
@@ -838,13 +854,19 @@ class BrowserEngine:
                 """)
                 if has_content:
                     if attempt > 0:
-                        logger.debug("Page content ready for %s after %ds", label, (attempt + 1) * 2)
+                        logger.debug(
+                            "Page content ready for %s after %ds",
+                            label,
+                            (attempt + 1) * 2,
+                        )
                     return True
             except Exception:
                 pass
             await asyncio.sleep(2)
             if attempt % 10 == 9:
-                logger.info("Still waiting for %s to render (%ds)...", label, (attempt + 1) * 2)
+                logger.info(
+                    "Still waiting for %s to render (%ds)...", label, (attempt + 1) * 2
+                )
         logger.warning("Timed out waiting for %s content after %ds", label, timeout)
         return False
 
@@ -881,18 +903,24 @@ class BrowserEngine:
             if not is_error:
                 return
 
-            logger.warning("Alarm.com error page detected (attempt %d, URL: %s), trying recovery", retry + 1, page.url)
+            logger.warning(
+                "Alarm.com error page detected (attempt %d, URL: %s), trying recovery",
+                retry + 1,
+                page.url,
+            )
 
             # Try clicking "Try Again" / "Reload Application" button
             try:
                 retry_btn = await page.query_selector(
-                    'button.btn-color-primary, '
+                    "button.btn-color-primary, "
                     'button:has-text("Try Again"), '
                     'button:has-text("Reload"), '
-                    'button.refresh'
+                    "button.refresh"
                 )
                 if retry_btn:
-                    btn_text = await retry_btn.evaluate("el => el.textContent.trim().substring(0, 40)")
+                    btn_text = await retry_btn.evaluate(
+                        "el => el.textContent.trim().substring(0, 40)"
+                    )
                     logger.info("Clicking recovery button: %s", btn_text)
                     await retry_btn.click()
                     await self._wait_for_page_content(page, "error retry", timeout=90)
@@ -1045,7 +1073,10 @@ class BrowserEngine:
                 await trust_btn.click(force=True)
                 logger.info("Clicked Trust Device button")
             else:
-                logger.warning("Trust Device button not found with selector: %s", SELECTORS["trust_device_submit"])
+                logger.warning(
+                    "Trust Device button not found with selector: %s",
+                    SELECTORS["trust_device_submit"],
+                )
                 # Log all buttons on the page for debugging
                 try:
                     all_btns = await page.evaluate("""
@@ -1073,9 +1104,13 @@ class BrowserEngine:
                 if current_url != pre_url:
                     logger.info(
                         "Trust device redirected after %ds: %s -> %s",
-                        (i + 1) * 2, pre_url, current_url,
+                        (i + 1) * 2,
+                        pre_url,
+                        current_url,
                     )
-                    await self._wait_for_page_content(page, "post-trust-device", timeout=90)
+                    await self._wait_for_page_content(
+                        page, "post-trust-device", timeout=90
+                    )
                     break
                 # Check if the trust device form has disappeared
                 try:
@@ -1086,12 +1121,17 @@ class BrowserEngine:
                         }
                     """)
                     if not trust_still_visible:
-                        logger.info("Trust device form disappeared after %ds", (i + 1) * 2)
+                        logger.info(
+                            "Trust device form disappeared after %ds", (i + 1) * 2
+                        )
                         break
                 except Exception:
                     pass
                 if i % 15 == 14:
-                    logger.info("Still waiting for trust device transition (%ds)...", (i + 1) * 2)
+                    logger.info(
+                        "Still waiting for trust device transition (%ds)...",
+                        (i + 1) * 2,
+                    )
 
             # Handle error page if it appeared
             await self._handle_error_page_retry(page)
@@ -1109,14 +1149,20 @@ class BrowserEngine:
 
             # If on a /web/ path (not auth flow), treat as authenticated
             from urllib.parse import urlparse
+
             path = urlparse(page.url).path.lower()
             auth_flow_prefixes = (
                 "/web/system-install/",
                 "/web/two-factor",
                 "/web/login",
             )
-            if path.startswith("/web/") and not any(path.startswith(p) for p in auth_flow_prefixes):
-                logger.info("On /web/ path after trust device (%s), treating as authenticated", page.url)
+            if path.startswith("/web/") and not any(
+                path.startswith(p) for p in auth_flow_prefixes
+            ):
+                logger.info(
+                    "On /web/ path after trust device (%s), treating as authenticated",
+                    page.url,
+                )
                 self.state.auth_status = AuthStatus.AUTHENTICATED
                 self.state.auth_message = "Successfully authenticated (device trusted)"
                 self.state.challenge_screenshot = None
@@ -1213,7 +1259,10 @@ class BrowserEngine:
                     """)
                     logger.info("2FA submit button found: %s", btn_info)
                 else:
-                    logger.warning("No 2FA submit button found with selector: %s", SELECTORS["twofa_submit"])
+                    logger.warning(
+                        "No 2FA submit button found with selector: %s",
+                        SELECTORS["twofa_submit"],
+                    )
 
                 if submit:
                     # Click the submit button ONCE. Ember processes the click
@@ -1225,7 +1274,10 @@ class BrowserEngine:
                         logger.info("Clicked 2FA submit button")
                         submitted_2fa = True
                     except Exception as exc:
-                        if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
+                        if (
+                            "context was destroyed" in str(exc)
+                            or "navigation" in str(exc).lower()
+                        ):
                             logger.debug("2FA click triggered navigation (good)")
                             submitted_2fa = True
                         else:
@@ -1234,12 +1286,14 @@ class BrowserEngine:
                 if not submitted_2fa and not submit:
                     # Last resort: try to find ANY button in the 2FA Ember component
                     # that looks like a submit action, avoiding ASP.NET shell buttons
-                    logger.warning("Primary selector failed, searching for verify button in Ember component")
+                    logger.warning(
+                        "Primary selector failed, searching for verify button in Ember component"
+                    )
                     fallback = await page.query_selector(
                         '[class*="two-factor"] button, '
                         '[class*="verification"] button, '
                         '[class*="login-setup"] button, '
-                        '.ember-view button.btn-color-primary'
+                        ".ember-view button.btn-color-primary"
                     )
                     if fallback:
                         fb_info = await fallback.evaluate("""
@@ -1250,8 +1304,13 @@ class BrowserEngine:
                             await fallback.click(force=True)
                             logger.info("Clicked fallback 2FA button")
                         except Exception as exc:
-                            if "context was destroyed" in str(exc) or "navigation" in str(exc).lower():
-                                logger.debug("Fallback click triggered navigation (good)")
+                            if (
+                                "context was destroyed" in str(exc)
+                                or "navigation" in str(exc).lower()
+                            ):
+                                logger.debug(
+                                    "Fallback click triggered navigation (good)"
+                                )
                             else:
                                 logger.warning("Fallback 2FA click error: %s", exc)
                     else:
@@ -1273,8 +1332,12 @@ class BrowserEngine:
                 await asyncio.sleep(2)
                 current = page.url
                 if current != pre_url:
-                    logger.info("URL changed after %ds: %s -> %s", (i + 1) * 2, pre_url, current)
-                    await self._wait_for_page_content(page, "post-challenge", timeout=90)
+                    logger.info(
+                        "URL changed after %ds: %s -> %s", (i + 1) * 2, pre_url, current
+                    )
+                    await self._wait_for_page_content(
+                        page, "post-challenge", timeout=90
+                    )
                     break
                 # Check if page content changed (Ember swapped views in same URL)
                 try:
@@ -1287,7 +1350,11 @@ class BrowserEngine:
                 except Exception:
                     pass
                 if i % 15 == 14:
-                    logger.info("Still waiting for page transition (%ds), current: %s", (i + 1) * 2, current)
+                    logger.info(
+                        "Still waiting for page transition (%ds), current: %s",
+                        (i + 1) * 2,
+                        current,
+                    )
 
             # Handle error page if it appeared
             await self._handle_error_page_retry(page)
@@ -1311,9 +1378,13 @@ class BrowserEngine:
             # _check_logged_in didn't find the specific indicator element.
             # The SPA may not have rendered the dashboard yet. Accept it.
             from urllib.parse import urlparse
+
             path = urlparse(page.url).path.lower()
             if path.startswith("/web/") and not _is_login_page(page.url):
-                logger.info("On /web/ path after challenge (%s), treating as authenticated", page.url)
+                logger.info(
+                    "On /web/ path after challenge (%s), treating as authenticated",
+                    page.url,
+                )
                 self.state.auth_status = AuthStatus.AUTHENTICATED
                 self.state.auth_message = "Successfully authenticated"
                 self.state.challenge_screenshot = None
@@ -1451,9 +1522,13 @@ class BrowserEngine:
 
                 # If we're not already on the video page, navigate there
                 from urllib.parse import urlparse
+
                 current_path = urlparse(page.url).path.lower()
                 if "/video" not in current_path:
-                    logger.debug("Not on video page (%s), looking for Video nav link", current_path)
+                    logger.debug(
+                        "Not on video page (%s), looking for Video nav link",
+                        current_path,
+                    )
 
                     # Log all links with "video" for debugging
                     try:
@@ -1470,7 +1545,10 @@ class BrowserEngine:
                                 inEmber: !!a.closest('.ember-application, .ember-view')
                             }))
                         """)
-                        logger.info("Video-related links on page: %s", json.dumps(video_links, indent=2)[:3000])
+                        logger.info(
+                            "Video-related links on page: %s",
+                            json.dumps(video_links, indent=2)[:3000],
+                        )
                     except Exception:
                         pass
 
@@ -1491,17 +1569,23 @@ class BrowserEngine:
 
                         # Wait for the video page to render.  Don't use
                         # networkidle (alarm.com analytics never settle).
-                        await self._wait_for_page_content(page, "video page", timeout=60)
+                        await self._wait_for_page_content(
+                            page, "video page", timeout=60
+                        )
                         # Extra time for WebRTC players to initialize
                         await asyncio.sleep(8)
                     else:
-                        logger.warning("No Video nav link found in DOM — cannot navigate to video page")
+                        logger.warning(
+                            "No Video nav link found in DOM — cannot navigate to video page"
+                        )
                 else:
                     logger.debug("Already on video page, waiting for players to render")
                     await asyncio.sleep(3)
 
                 if _is_login_page(page.url):
-                    logger.warning("Session lost navigating to video (URL: %s)", page.url)
+                    logger.warning(
+                        "Session lost navigating to video (URL: %s)", page.url
+                    )
                 elif "/video" in page.url or "/video" in current_path:
                     # Dump the full page state for debugging camera discovery
                     await self._debug_page_state(page, "video_page_for_discovery")
@@ -1510,7 +1594,9 @@ class BrowserEngine:
 
                     # Retry with longer wait if no cameras found (players may still be loading)
                     if not cameras:
-                        logger.info("No cameras found yet, waiting 10s for WebRTC players to initialize...")
+                        logger.info(
+                            "No cameras found yet, waiting 10s for WebRTC players to initialize..."
+                        )
                         await asyncio.sleep(10)
                         cameras = await self._discover_cameras_from_page(page)
 
@@ -1787,7 +1873,11 @@ class BrowserEngine:
                         )
                 if cameras:
                     strategies = set(cam.get("strategy", "?") for cam in result)
-                    logger.info("Page scrape found %d camera(s) via %s", len(cameras), strategies)
+                    logger.info(
+                        "Page scrape found %d camera(s) via %s",
+                        len(cameras),
+                        strategies,
+                    )
 
         except Exception:
             logger.exception("Page-based camera discovery failed")
@@ -1818,9 +1908,7 @@ class BrowserEngine:
 
         # Navigate via SPA — Ember uses href="#" on nav links with
         # data-testid attributes for identification.
-        video_link = await page.query_selector(
-            'a[data-testid="video-link"]'
-        )
+        video_link = await page.query_selector('a[data-testid="video-link"]')
         if video_link:
             logger.debug("Clicking Video nav link for live view")
             await video_link.click()
@@ -1844,11 +1932,14 @@ class BrowserEngine:
                 retry_btn = await page.query_selector(
                     'button:has-text("Retry"), '
                     'button:has-text("RETRY"), '
-                    '.video-player button.btn-color-primary'
+                    ".video-player button.btn-color-primary"
                 )
                 if not retry_btn:
                     return
-                logger.info("Video player error detected, clicking Retry (attempt %d)", attempt + 1)
+                logger.info(
+                    "Video player error detected, clicking Retry (attempt %d)",
+                    attempt + 1,
+                )
                 await retry_btn.click()
                 await asyncio.sleep(8)
                 # Check if video loaded after retry
@@ -2101,14 +2192,19 @@ class BrowserEngine:
 
             # If we're on a /web/ path (not auth flow), session is likely valid
             from urllib.parse import urlparse
+
             path = urlparse(url).path.lower()
             auth_flow_prefixes = (
                 "/web/system-install/",
                 "/web/two-factor",
                 "/web/login",
             )
-            if path.startswith("/web/") and not any(path.startswith(p) for p in auth_flow_prefixes):
-                logger.debug("Session check: on /web/ path %s, session appears valid", path)
+            if path.startswith("/web/") and not any(
+                path.startswith(p) for p in auth_flow_prefixes
+            ):
+                logger.debug(
+                    "Session check: on /web/ path %s, session appears valid", path
+                )
                 return True
 
             # Use a lightweight fetch to check auth without navigating

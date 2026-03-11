@@ -88,8 +88,10 @@ async def get_auth_status(request: web.Request) -> web.Response:
             page = browser._page
             if page and not page.is_closed():
                 from alarmdotcom_cameras.browser import _is_login_page
+
                 if _is_login_page(page.url):
                     from alarmdotcom_cameras.browser import AuthStatus
+
                     browser.state.auth_status = AuthStatus.LOGGED_OUT
                     browser.state.auth_message = "Session expired. Please try again."
                     browser.state.challenge_screenshot = None
@@ -373,8 +375,14 @@ async def get_debug_live(request: web.Request) -> web.Response:
 
     if not browser.state.browser_alive:
         return web.json_response(
-            {**base, "url": "", "title": "", "dom_summary": "",
-             "raw_html": "", "error": "Browser not running"},
+            {
+                **base,
+                "url": "",
+                "title": "",
+                "dom_summary": "",
+                "raw_html": "",
+                "error": "Browser not running",
+            },
             headers=no_cache,
         )
 
@@ -382,8 +390,14 @@ async def get_debug_live(request: web.Request) -> web.Response:
     page = browser._page
     if page is None or page.is_closed():
         return web.json_response(
-            {**base, "url": "", "title": "", "dom_summary": "",
-             "raw_html": "", "error": "No page open (browser idle)"},
+            {
+                **base,
+                "url": "",
+                "title": "",
+                "dom_summary": "",
+                "raw_html": "",
+                "error": "No page open (browser idle)",
+            },
             headers=no_cache,
         )
 
@@ -392,9 +406,14 @@ async def get_debug_live(request: web.Request) -> web.Response:
     # destroy the execution context and cause "no_session" redirects.
     if browser._lock.locked():
         return web.json_response(
-            {**base, "url": page.url, "title": "(locked — auth flow in progress)",
-             "dom_summary": "", "raw_html": "",
-             "error": "Browser lock held — skipping page access to avoid interference"},
+            {
+                **base,
+                "url": page.url,
+                "title": "(locked — auth flow in progress)",
+                "dom_summary": "",
+                "raw_html": "",
+                "error": "Browser lock held — skipping page access to avoid interference",
+            },
             headers=no_cache,
         )
 
@@ -493,24 +512,39 @@ async def get_debug_live(request: web.Request) -> web.Response:
             raw_html = "[Failed to capture raw HTML: " + str(html_exc) + "]"
 
         return web.json_response(
-            {**base, "url": url, "title": title,
-             "dom_summary": dom_summary, "raw_html": raw_html},
+            {
+                **base,
+                "url": url,
+                "title": title,
+                "dom_summary": dom_summary,
+                "raw_html": raw_html,
+            },
             headers=no_cache,
         )
     except asyncio.TimeoutError:
         logger.warning("Debug live state timed out (page may be navigating)")
         return web.json_response(
-            {**base, "url": getattr(page, "url", ""), "title": "",
-             "dom_summary": "", "raw_html": "",
-             "error": "Timed out reading page (browser may be navigating)"},
+            {
+                **base,
+                "url": getattr(page, "url", ""),
+                "title": "",
+                "dom_summary": "",
+                "raw_html": "",
+                "error": "Timed out reading page (browser may be navigating)",
+            },
             headers=no_cache,
         )
     except Exception as exc:
         logger.exception("Debug live state failed")
         return web.json_response(
-            {**base, "url": getattr(page, "url", ""), "title": "",
-             "dom_summary": "", "raw_html": "",
-             "error": str(exc)},
+            {
+                **base,
+                "url": getattr(page, "url", ""),
+                "title": "",
+                "dom_summary": "",
+                "raw_html": "",
+                "error": str(exc),
+            },
             headers=no_cache,
         )
 
@@ -529,14 +563,18 @@ async def get_debug_live_screenshot(request: web.Request) -> web.Response:
 
     if not browser.state.browser_alive:
         return web.json_response(
-            {"error": "Browser not running"}, status=503, headers=no_cache,
+            {"error": "Browser not running"},
+            status=503,
+            headers=no_cache,
         )
 
     # Use existing page — don't create a blank one as a side-effect
     page = browser._page
     if page is None or page.is_closed():
         return web.json_response(
-            {"error": "No page open (browser idle)"}, status=503, headers=no_cache,
+            {"error": "No page open (browser idle)"},
+            status=503,
+            headers=no_cache,
         )
 
     # Don't take a screenshot while the browser lock is held — it interferes
@@ -544,12 +582,14 @@ async def get_debug_live_screenshot(request: web.Request) -> web.Response:
     if browser._lock.locked():
         return web.json_response(
             {"error": "Browser lock held — skipping screenshot to avoid interference"},
-            status=503, headers=no_cache,
+            status=503,
+            headers=no_cache,
         )
 
     try:
         screenshot_bytes = await asyncio.wait_for(
-            page.screenshot(full_page=True), timeout=10,
+            page.screenshot(full_page=True),
+            timeout=10,
         )
         return web.Response(
             body=screenshot_bytes,
@@ -560,12 +600,15 @@ async def get_debug_live_screenshot(request: web.Request) -> web.Response:
         logger.warning("Debug screenshot timed out (page may be navigating)")
         return web.json_response(
             {"error": "Screenshot timed out (page may be navigating)"},
-            status=503, headers=no_cache,
+            status=503,
+            headers=no_cache,
         )
     except Exception as exc:
         logger.exception("Debug live screenshot failed")
         return web.json_response(
-            {"error": str(exc)}, status=500, headers=no_cache,
+            {"error": str(exc)},
+            status=500,
+            headers=no_cache,
         )
 
 

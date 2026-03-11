@@ -113,7 +113,9 @@ class AddonUrlResolver:
         new_url = await _discover_addon_url(self._hass)
         if new_url and await self._test_url(new_url):
             self._current_url = new_url
-            _LOGGER.info("Re-discovered addon URL via Supervisor: %s", self._current_url)
+            _LOGGER.info(
+                "Re-discovered addon URL via Supervisor: %s", self._current_url
+            )
             return self._current_url
 
         # Nothing worked, keep current

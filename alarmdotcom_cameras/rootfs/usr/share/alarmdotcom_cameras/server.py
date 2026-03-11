@@ -27,12 +27,14 @@ class RingBufferLogHandler(logging.Handler):
         self.records: collections.deque[dict] = collections.deque(maxlen=capacity)
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.records.append({
-            "time": record.created,
-            "level": record.levelname,
-            "name": record.name,
-            "message": self.format(record),
-        })
+        self.records.append(
+            {
+                "time": record.created,
+                "level": record.levelname,
+                "name": record.name,
+                "message": self.format(record),
+            }
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,12 +89,15 @@ async def session_health_task(app: web.Application) -> None:
                 try:
                     page = await browser._get_page()
                     from alarmdotcom_cameras.browser import _is_login_page
+
                     if _is_login_page(page.url):
                         logger.warning(
                             "Auth state is %s but browser is on login page — "
-                            "session expired, re-logging in", auth_val
+                            "session expired, re-logging in",
+                            auth_val,
                         )
                         from alarmdotcom_cameras.browser import AuthStatus
+
                         browser.state.auth_status = AuthStatus.LOGGED_OUT
                         browser.state.challenge_screenshot = None
                         creds = cred_store.load()
@@ -100,7 +105,8 @@ async def session_health_task(app: web.Application) -> None:
                             await browser.login(creds["username"], creds["password"])
                     else:
                         logger.debug(
-                            "Skipping health check: auth flow in progress (%s)", auth_val
+                            "Skipping health check: auth flow in progress (%s)",
+                            auth_val,
                         )
                 except Exception:
                     pass

@@ -45,9 +45,7 @@ async def async_setup_entry(
     )
 
 
-async def _fetch_health(
-    session: aiohttp.ClientSession, addon_url: str
-) -> dict | None:
+async def _fetch_health(session: aiohttp.ClientSession, addon_url: str) -> dict | None:
     """Fetch health data from the add-on."""
     try:
         async with session.get(
@@ -204,8 +202,6 @@ class AddonLastSnapshotSensor(AddonDiagnosticSensor):
         if health:
             ts = health.get("last_snapshot_time")
             if ts:
-                self._attr_native_value = datetime.fromtimestamp(
-                    ts, tz=timezone.utc
-                )
+                self._attr_native_value = datetime.fromtimestamp(ts, tz=timezone.utc)
             else:
                 self._attr_native_value = None

@@ -250,9 +250,7 @@ class AlarmDotComCamera(Camera):
                     "Capture returned status %d for %s", resp.status, self._camera_id
                 )
         except Exception:
-            _LOGGER.exception(
-                "Failed to capture snapshot for %s", self._camera_id
-            )
+            _LOGGER.exception("Failed to capture snapshot for %s", self._camera_id)
         return self._last_image
 
     async def async_capture_snapshot(self) -> None:
