@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.17
+
+### Fixed - HA companion integration
+
+- **Fix "Invalid handler specified"** — update deprecated HA imports
+  (`FlowResult` → `ConfigFlowResult`, remove `is_hassio`)
+- **Auto-discover addon URL** via Supervisor API — works regardless of
+  repo hash in the addon hostname
+- **Auto-resolve URL after reboots** — if the addon's IP changes, the
+  integration re-discovers it via Supervisor API automatically
+- **Bump companion integration manifest** version so the install script
+  actually copies updated files
+
 ## 0.1.13
 
 ### Fixed - Docker/container auth flow now works reliably
