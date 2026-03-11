@@ -1,7 +1,6 @@
 """Config flow for Alarm.com Cameras integration."""
 
 import logging
-import os
 
 import aiohttp
 import voluptuous as vol
@@ -12,7 +11,7 @@ from .const import CONF_ADDON_URL, DEFAULT_ADDON_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-ADDON_SLUG = "alarmdotcom_cameras"
+ADDON_SLUG_SUFFIX = "alarmdotcom_cameras"
 
 
 async def _test_addon_url(url: str) -> bool:
@@ -31,77 +30,47 @@ async def _test_addon_url(url: str) -> bool:
     return False
 
 
-async def _discover_addon_url() -> str | None:
-    """Use the Supervisor API to discover the add-on's internal URL.
+def _discover_addon_slug(hass) -> str | None:
+    """Find the full addon slug using HA's cached addon info."""
+    try:
+        from homeassistant.components.hassio import get_addons_info
 
-    The Supervisor provides addon info including the internal IP address.
-    This works regardless of the repo hash in the addon's hostname.
-    """
-    supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-    if not supervisor_token:
+        addons = get_addons_info(hass)
+        if not addons:
+            return None
+
+        for slug in addons:
+            if slug.endswith(ADDON_SLUG_SUFFIX) or slug == ADDON_SLUG_SUFFIX:
+                return slug
+    except Exception as exc:
+        _LOGGER.debug("Could not query hassio for addon list: %s", exc)
+    return None
+
+
+async def _discover_addon_url(hass) -> str | None:
+    """Discover the addon's internal URL via the Supervisor API."""
+    slug = _discover_addon_slug(hass)
+    if not slug:
+        _LOGGER.debug("Addon slug not found in hassio addon list")
         return None
 
-    headers = {"Authorization": f"Bearer {supervisor_token}"}
-
     try:
-        async with aiohttp.ClientSession() as session:
-            # List all addons to find ours by slug suffix
-            async with session.get(
-                "http://supervisor/addons",
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                addons = data.get("data", {}).get("addons", [])
+        from homeassistant.components.hassio import async_get_addon_info
 
-            # Find our addon — the full slug includes the repo prefix
-            # (e.g., "a1b2c3d4_alarmdotcom_cameras" or "local_alarmdotcom_cameras")
-            our_addon = None
-            for addon in addons:
-                slug = addon.get("slug", "")
-                if slug.endswith(f"_{ADDON_SLUG}") or slug == ADDON_SLUG:
-                    our_addon = slug
-                    break
+        info = await async_get_addon_info(hass, slug)
+        ip = info.get("ip_address")
+        if ip:
+            url = f"http://{ip}:8099"
+            _LOGGER.info("Discovered addon URL: %s (slug: %s)", url, slug)
+            return url
 
-            if not our_addon:
-                _LOGGER.debug("Add-on not found in Supervisor addon list")
-                return None
-
-            # Get detailed info including the internal IP
-            async with session.get(
-                f"http://supervisor/addons/{our_addon}/info",
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                info = await resp.json()
-                addon_data = info.get("data", {})
-                ip = addon_data.get("ip_address")
-                # The ingress port from config.yaml
-                port = 8099
-
-                if ip:
-                    url = f"http://{ip}:{port}"
-                    _LOGGER.info(
-                        "Discovered add-on via Supervisor API: %s (slug: %s)",
-                        url, our_addon,
-                    )
-                    return url
-
-                # Fallback: try the hostname (slug with underscores → hyphens)
-                hostname = our_addon.replace("_", "-")
-                url = f"http://{hostname}:{port}"
-                _LOGGER.info(
-                    "Using add-on hostname: %s (slug: %s)", url, our_addon,
-                )
-                return url
-
+        # Fallback: hostname from slug
+        hostname = slug.replace("_", "-")
+        url = f"http://{hostname}:8099"
+        _LOGGER.info("Using addon hostname: %s (slug: %s)", url, slug)
+        return url
     except Exception as exc:
-        _LOGGER.debug("Supervisor API discovery failed: %s", exc)
-
+        _LOGGER.debug("Failed to get addon info for %s: %s", slug, exc)
     return None
 
 
@@ -126,11 +95,11 @@ class AlarmDotComCamerasConfigFlow(ConfigFlow, domain=DOMAIN):
                 )
             errors["base"] = "cannot_connect"
 
-        # Auto-detect the add-on URL via Supervisor API, then fall back
-        # to probing well-known addresses.
+        # Auto-detect the add-on URL via HA's hassio component,
+        # then fall back to probing well-known addresses.
         suggested_url = DEFAULT_ADDON_URL
 
-        supervisor_url = await _discover_addon_url()
+        supervisor_url = await _discover_addon_url(self.hass)
         if supervisor_url and await _test_addon_url(supervisor_url):
             suggested_url = supervisor_url
         elif await _test_addon_url(DEFAULT_ADDON_URL):

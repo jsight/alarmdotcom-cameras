@@ -5,7 +5,6 @@ for each discovered camera.
 """
 
 import logging
-import os
 import time
 
 import aiohttp
@@ -19,12 +18,55 @@ from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.CAMERA]
+PLATFORMS = [Platform.CAMERA, Platform.SENSOR]
 
-ADDON_SLUG = "alarmdotcom_cameras"
+ADDON_SLUG_SUFFIX = "alarmdotcom_cameras"
 
 # Re-resolve the addon URL at most once per minute
 _RESOLVE_COOLDOWN = 60
+
+
+def _discover_addon_slug(hass: HomeAssistant) -> str | None:
+    """Find the full addon slug using HA's cached addon info."""
+    try:
+        from homeassistant.components.hassio import get_addons_info
+
+        addons = get_addons_info(hass)
+        if not addons:
+            return None
+        for slug in addons:
+            if slug.endswith(ADDON_SLUG_SUFFIX) or slug == ADDON_SLUG_SUFFIX:
+                return slug
+    except Exception as exc:
+        _LOGGER.debug("Could not query hassio for addon list: %s", exc)
+    return None
+
+
+async def _discover_addon_url(hass: HomeAssistant) -> str | None:
+    """Discover the addon's internal URL via the Supervisor API."""
+    slug = _discover_addon_slug(hass)
+    if not slug:
+        _LOGGER.debug("Addon slug not found in hassio addon list")
+        return None
+
+    try:
+        from homeassistant.components.hassio import async_get_addon_info
+
+        info = await async_get_addon_info(hass, slug)
+        ip = info.get("ip_address")
+        if ip:
+            url = f"http://{ip}:8099"
+            _LOGGER.info("Discovered addon URL: %s (slug: %s)", url, slug)
+            return url
+
+        # Fallback: hostname from slug
+        hostname = slug.replace("_", "-")
+        url = f"http://{hostname}:8099"
+        _LOGGER.info("Using addon hostname: %s (slug: %s)", url, slug)
+        return url
+    except Exception as exc:
+        _LOGGER.debug("Failed to get addon info for %s: %s", slug, exc)
+    return None
 
 
 class AddonUrlResolver:
@@ -35,7 +77,10 @@ class AddonUrlResolver:
     (e.g., after a reboot when the addon gets a new IP).
     """
 
-    def __init__(self, configured_url: str, session: aiohttp.ClientSession) -> None:
+    def __init__(
+        self, hass: HomeAssistant, configured_url: str, session: aiohttp.ClientSession
+    ) -> None:
+        self._hass = hass
         self._configured_url = configured_url
         self._current_url = configured_url
         self._session = session
@@ -65,7 +110,7 @@ class AddonUrlResolver:
                 return self._current_url
 
         # Try Supervisor API discovery
-        new_url = await self._discover_via_supervisor()
+        new_url = await _discover_addon_url(self._hass)
         if new_url and await self._test_url(new_url):
             self._current_url = new_url
             _LOGGER.info("Re-discovered addon URL via Supervisor: %s", self._current_url)
@@ -88,59 +133,13 @@ class AddonUrlResolver:
             pass
         return False
 
-    async def _discover_via_supervisor(self) -> str | None:
-        supervisor_token = os.environ.get("SUPERVISOR_TOKEN")
-        if not supervisor_token:
-            return None
-
-        headers = {"Authorization": f"Bearer {supervisor_token}"}
-        try:
-            async with self._session.get(
-                "http://supervisor/addons",
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                data = await resp.json()
-                addons = data.get("data", {}).get("addons", [])
-
-            our_addon = None
-            for addon in addons:
-                slug = addon.get("slug", "")
-                if slug.endswith(f"_{ADDON_SLUG}") or slug == ADDON_SLUG:
-                    our_addon = slug
-                    break
-
-            if not our_addon:
-                return None
-
-            async with self._session.get(
-                f"http://supervisor/addons/{our_addon}/info",
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status != 200:
-                    return None
-                info = await resp.json()
-                ip = info.get("data", {}).get("ip_address")
-                if ip:
-                    return f"http://{ip}:8099"
-
-                hostname = our_addon.replace("_", "-")
-                return f"http://{hostname}:8099"
-
-        except Exception as exc:
-            _LOGGER.debug("Supervisor API discovery failed: %s", exc)
-        return None
-
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Alarm.com Cameras from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     session = async_get_clientsession(hass)
-    resolver = AddonUrlResolver(entry.data["addon_url"], session)
+    resolver = AddonUrlResolver(hass, entry.data["addon_url"], session)
 
     # Resolve the URL now to ensure we have a working one at startup
     await resolver.resolve()

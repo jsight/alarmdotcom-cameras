@@ -1,5 +1,5 @@
 name: Alarm.com Cameras
-version: "0.1.18"
+version: "0.1.19"
 slug: alarmdotcom_cameras
 description: "View Alarm.com camera snapshots and live streams via a headless browser."
 image: "ghcr.io/jsight/alarmdotcom-cameras-{arch}"

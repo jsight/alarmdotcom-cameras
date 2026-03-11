@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.19
+
+### Added - Diagnostic entities and improved URL discovery
+
+- **Diagnostic sensor entities** — the companion integration now creates
+  diagnostic entities: Auth Status, Cameras Discovered, Addon Version,
+  Addon Uptime, and Last Snapshot time
+- **Improved addon URL discovery** — both config flow and runtime URL
+  resolver now use HA's built-in `get_addons_info`/`async_get_addon_info`
+  instead of raw HTTP calls to the Supervisor API
+
 ## 0.1.18
 
 ### Added - Camera snapshots and capture service
