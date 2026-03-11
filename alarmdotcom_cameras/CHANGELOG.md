@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.21
+
+### Added - Snapshot refresh button on camera card
+
+- **ON_OFF feature flag** — the camera entity now advertises turn-on/off
+  support, which adds a refresh button to the HA camera card that
+  triggers an on-demand snapshot capture
+
 ## 0.1.20
 
 ### Fixed - Camera entities not appearing
