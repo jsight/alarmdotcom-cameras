@@ -24,16 +24,17 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up camera entities from the add-on."""
-    addon_url = hass.data[DOMAIN][entry.entry_id]["addon_url"]
+    entry_data = hass.data[DOMAIN][entry.entry_id]
+    resolver = entry_data["resolver"]
     session = async_get_clientsession(hass)
 
     # Discover cameras from the add-on
-    cameras = await _fetch_cameras(session, addon_url)
+    cameras = await _fetch_cameras(session, resolver.url)
 
     entities = [
         AlarmDotComCamera(
             entry=entry,
-            addon_url=addon_url,
+            resolver=resolver,
             camera_id=cam["id"],
             camera_name=cam["name"],
             camera_model=cam.get("model", ""),
@@ -46,16 +47,18 @@ async def async_setup_entry(
         async_add_entities(entities, update_before_add=True)
         _LOGGER.info("Added %d Alarm.com camera entities", len(entities))
     else:
-        _LOGGER.warning("No cameras found from the add-on at %s", addon_url)
+        _LOGGER.warning("No cameras found from the add-on at %s", resolver.url)
 
     # Schedule periodic re-discovery to pick up new cameras
     async def _periodic_discovery(_now=None):
-        new_cameras = await _fetch_cameras(session, addon_url)
+        # Re-resolve URL in case addon IP changed
+        await resolver.resolve()
+        new_cameras = await _fetch_cameras(session, resolver.url)
         existing_ids = {e.camera_id for e in entities}
         new_entities = [
             AlarmDotComCamera(
                 entry=entry,
-                addon_url=addon_url,
+                resolver=resolver,
                 camera_id=cam["id"],
                 camera_name=cam["name"],
                 camera_model=cam.get("model", ""),
@@ -99,7 +102,7 @@ class AlarmDotComCamera(Camera):
     def __init__(
         self,
         entry: ConfigEntry,
-        addon_url: str,
+        resolver,
         camera_id: str,
         camera_name: str,
         camera_model: str,
@@ -108,7 +111,7 @@ class AlarmDotComCamera(Camera):
         """Initialize the camera."""
         super().__init__()
         self._entry = entry
-        self._addon_url = addon_url
+        self._resolver = resolver
         self._camera_id = camera_id
         self._camera_model = camera_model
         self._session = session
@@ -120,6 +123,11 @@ class AlarmDotComCamera(Camera):
 
         self._last_image: bytes | None = None
         self._last_snapshot_time: float | None = None
+
+    @property
+    def _addon_url(self) -> str:
+        """Get the current addon URL (may change after re-discovery)."""
+        return self._resolver.url
 
     @property
     def camera_id(self) -> str:
@@ -161,11 +169,12 @@ class AlarmDotComCamera(Camera):
             ) as resp:
                 if resp.status == 200:
                     self._last_image = await resp.read()
-                    # Fetch metadata too
                     await self._update_metadata()
                     return self._last_image
         except Exception:
-            _LOGGER.debug("Failed to fetch snapshot for %s", self._camera_id)
+            _LOGGER.debug("Failed to fetch snapshot for %s, re-resolving URL", self._camera_id)
+            # Connection failed — try to re-resolve the addon URL
+            await self._resolver.resolve()
 
         return self._last_image
 
