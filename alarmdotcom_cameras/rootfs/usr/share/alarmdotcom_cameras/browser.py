@@ -1897,36 +1897,110 @@ class BrowserEngine:
         Returns True if the live view is showing video content.
         """
         current_url = page.url
+        logger.info(
+            "_navigate_to_live_view: camera=%s, current URL=%s",
+            camera.id,
+            current_url[:120],
+        )
 
         # If we're already on the live view page with video playing, stay here
         if "/video" in current_url:
             video = await page.query_selector(SELECTORS["video_element"])
             if video:
-                logger.debug("Already on video page with player visible")
+                logger.info("Already on video page with player visible")
                 return True
+            logger.info(
+                "On video page but no video element yet, checking for retry"
+            )
             # Check for video error with Retry button
             await self._retry_video_player(page)
             video = await page.query_selector(SELECTORS["video_element"])
             if video:
+                logger.info("Video element found after retry")
                 return True
+            # Wait longer — the video player may still be loading
+            logger.info("Waiting up to 15s for video element to appear...")
+            try:
+                video = await page.wait_for_selector(
+                    SELECTORS["video_element"], timeout=15_000
+                )
+                if video:
+                    logger.info("Video element appeared after wait")
+                    return True
+            except Exception:
+                logger.info("Video element did not appear within 15s")
 
         # Navigate via SPA — Ember uses href="#" on nav links with
         # data-testid attributes for identification.
         video_link = await page.query_selector('a[data-testid="video-link"]')
         if video_link:
-            logger.debug("Clicking Video nav link for live view")
+            logger.info("Clicking Video nav link for live view")
             await video_link.click()
             await self._wait_for_page_content(page, "video nav", timeout=30)
             await asyncio.sleep(5)
+            logger.info(
+                "After video link click, URL=%s", page.url[:120]
+            )
 
             # Check for video player error and retry if needed
             await self._retry_video_player(page)
 
             video = await page.query_selector(SELECTORS["video_element"])
             if video:
+                logger.info("Video element found after nav link click")
                 return True
+            # Wait for late-loading video
+            logger.info("Waiting up to 15s for video element after nav...")
+            try:
+                video = await page.wait_for_selector(
+                    SELECTORS["video_element"], timeout=15_000
+                )
+                if video:
+                    logger.info("Video element appeared after nav wait")
+                    return True
+            except Exception:
+                logger.info("Video element did not appear after nav")
+        else:
+            logger.info(
+                "No video-link nav element found on page"
+            )
 
-        logger.warning("Could not navigate to live view for camera %s", camera.id)
+        # Log what we can see on the page to help debug
+        try:
+            debug_info = await page.evaluate("""() => {
+                const r = {};
+                r.url = window.location.href;
+                r.title = document.title;
+                r.bodyText = document.body ?
+                    document.body.innerText.substring(0, 500) : '<no body>';
+                r.videoElements = document.querySelectorAll(
+                    'video, canvas, .video-player, [class*="video"]'
+                ).length;
+                r.navLinks = Array.from(
+                    document.querySelectorAll('a[data-testid]')
+                ).map(a => a.getAttribute('data-testid')).join(', ');
+                r.iframes = document.querySelectorAll('iframe').length;
+                return r;
+            }""")
+            logger.warning(
+                "Could not navigate to live view for camera %s. "
+                "Page state: url=%s, title=%s, videoElements=%s, "
+                "navLinks=[%s], iframes=%s, bodyText=%.200s",
+                camera.id,
+                debug_info.get("url", "?"),
+                debug_info.get("title", "?"),
+                debug_info.get("videoElements", "?"),
+                debug_info.get("navLinks", "?"),
+                debug_info.get("iframes", "?"),
+                debug_info.get("bodyText", "?"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Could not navigate to live view for camera %s "
+                "(page debug also failed: %s)",
+                camera.id,
+                exc,
+            )
         return False
 
     async def _retry_video_player(self, page: Page) -> None:
@@ -2123,13 +2197,22 @@ class BrowserEngine:
                 wait_until="domcontentloaded",
                 timeout=120_000,
             )
+            post_goto_url = page.url
+            logger.info("Unpark goto complete, URL now: %s", post_goto_url[:120])
             await self._wait_for_page_content(page, "navigate to cameras")
+            logger.info(
+                "Unpark page content loaded, URL now: %s", page.url[:120]
+            )
             if _is_login_page(page.url):
                 logger.warning("Session expired during unpark")
                 self.state.auth_status = AuthStatus.LOGGED_OUT
                 return False
             # Wait for the SPA to settle and video player to load
+            logger.info("Unpark waiting 5s for SPA to settle...")
             await asyncio.sleep(5)
+            logger.info(
+                "Unpark settled, URL now: %s", page.url[:120]
+            )
 
         self.state.parked = False
         return await self._navigate_to_live_view(page, camera)
