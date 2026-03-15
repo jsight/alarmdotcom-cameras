@@ -2143,39 +2143,73 @@ class BrowserEngine:
     # ---- Browser Parking ----
 
     async def park(self) -> None:
-        """Navigate to the alarm.com dashboard to stop video streaming.
+        """Navigate away from the video page to stop video streaming.
 
-        Keeps the session alive while reducing load on alarm.com's
-        video infrastructure.  Must be called with self._lock held.
+        Uses SPA nav link clicks — NEVER page.goto() which destroys the
+        Ember SPA and causes 'Page Not Found'.  Must be called with
+        self._lock held.
         """
         try:
             page = await self._get_page()
-            # Click the dashboard nav link if we're in the SPA
-            dash_link = await page.query_selector(
+            current_url = page.url
+
+            # If already not on video page, nothing to do
+            if "/video" not in current_url:
+                self.state.parked = True
+                logger.info("Browser already off video page, marked as parked")
+                return
+
+            # Click the Home nav link to leave the video page.
+            # alarm.com's Ember SPA uses data-testid on nav links.
+            home_link = await page.query_selector(
+                'a[data-testid="home-link"], '
                 'a[data-testid="dashboard-link"], '
-                'a[href*="/web/dashboard"]'
+                'a[href="#/home"], '
+                'a[href="#/dashboard"]'
             )
-            if dash_link:
-                await dash_link.click()
+            if home_link:
+                logger.info("Parking: clicking Home nav link")
+                await home_link.click()
                 await asyncio.sleep(3)
-            else:
-                # Fallback: navigate directly (re-enters the SPA)
-                await page.goto(
-                    DASHBOARD_URL,
-                    wait_until="domcontentloaded",
-                    timeout=60_000,
+                self.state.parked = True
+                logger.info(
+                    "Browser parked (URL: %s)", page.url[:80]
                 )
-                await asyncio.sleep(3)
+                return
+
+            # Try broader selectors — look for any nav link that isn't Video
+            nav_links = await page.query_selector_all("a[data-testid]")
+            for link in nav_links:
+                testid = await link.get_attribute("data-testid")
+                if testid and "video" not in testid.lower():
+                    logger.info(
+                        "Parking: clicking non-video nav link: %s", testid
+                    )
+                    await link.click()
+                    await asyncio.sleep(3)
+                    self.state.parked = True
+                    logger.info(
+                        "Browser parked via %s (URL: %s)",
+                        testid,
+                        page.url[:80],
+                    )
+                    return
+
+            # Last resort: just mark as parked — we'll be on the video page
+            # but at least we won't destroy the SPA with page.goto()
+            logger.warning(
+                "Could not find nav link to park, staying on video page"
+            )
             self.state.parked = True
-            logger.info("Browser parked on dashboard")
         except Exception:
             logger.exception("Failed to park browser")
 
     async def unpark_to_camera(self, camera_id: str) -> bool:
         """Navigate from parked state to a camera's live view.
 
-        Must be called with self._lock held.  Returns True if the
-        live view is showing video content.
+        Uses SPA nav link clicks via _navigate_to_live_view — NEVER
+        page.goto() which destroys the Ember SPA.  Must be called with
+        self._lock held.
         """
         camera = next((c for c in self.state.cameras if c.id == camera_id), None)
         if not camera:
@@ -2184,37 +2218,25 @@ class BrowserEngine:
 
         page = await self._get_page()
         current_url = page.url
+        logger.info(
+            "Unparking to camera %s from URL: %s",
+            camera_id,
+            current_url[:80],
+        )
 
-        # If we're not already on the video page, navigate there.
-        # This handles both: parked on dashboard, and not on alarm.com.
-        if "/video" not in current_url:
-            logger.info(
-                "Unparking: navigating from %s to cameras page",
+        # Check if the SPA is still alive (we should be on an alarm.com
+        # /web/ page).  If not, we can't navigate via SPA links.
+        if ALARM_BASE_URL not in current_url or _is_login_page(current_url):
+            logger.warning(
+                "SPA not available (URL: %s), session may be expired",
                 current_url[:80],
             )
-            await page.goto(
-                CAMERAS_URL,
-                wait_until="domcontentloaded",
-                timeout=120_000,
-            )
-            post_goto_url = page.url
-            logger.info("Unpark goto complete, URL now: %s", post_goto_url[:120])
-            await self._wait_for_page_content(page, "navigate to cameras")
-            logger.info(
-                "Unpark page content loaded, URL now: %s", page.url[:120]
-            )
-            if _is_login_page(page.url):
-                logger.warning("Session expired during unpark")
-                self.state.auth_status = AuthStatus.LOGGED_OUT
-                return False
-            # Wait for the SPA to settle and video player to load
-            logger.info("Unpark waiting 5s for SPA to settle...")
-            await asyncio.sleep(5)
-            logger.info(
-                "Unpark settled, URL now: %s", page.url[:120]
-            )
+            self.state.auth_status = AuthStatus.LOGGED_OUT
+            return False
 
         self.state.parked = False
+        # _navigate_to_live_view handles clicking the Video nav link
+        # and waiting for the video player to load
         return await self._navigate_to_live_view(page, camera)
 
     async def burst_capture(
