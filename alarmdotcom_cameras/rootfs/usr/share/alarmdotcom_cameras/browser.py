@@ -1958,7 +1958,8 @@ class BrowserEngine:
     async def capture_snapshot(self, camera_id: str) -> bytes | None:
         """Navigate to a camera's live view and capture a screenshot.
 
-        Returns JPEG image bytes or None on failure.
+        Returns JPEG image bytes or None on failure.  Handles the parked
+        state by navigating to the cameras page first if needed.
         """
         if self.state.auth_status != AuthStatus.AUTHENTICATED:
             logger.warning("Cannot capture snapshot: not authenticated")
@@ -1970,10 +1971,10 @@ class BrowserEngine:
             return None
 
         page = await self._get_page()
-        self.state.parked = False
 
         try:
-            if not await self._navigate_to_live_view(page, camera):
+            # Use unpark_to_camera which handles dashboard→video navigation
+            if not await self.unpark_to_camera(camera_id):
                 return None
 
             # Try to screenshot just the video player element
@@ -2110,18 +2111,25 @@ class BrowserEngine:
         page = await self._get_page()
         current_url = page.url
 
-        # If we're not on alarm.com at all, re-enter via goto
-        if ALARM_BASE_URL not in current_url:
+        # If we're not already on the video page, navigate there.
+        # This handles both: parked on dashboard, and not on alarm.com.
+        if "/video" not in current_url:
+            logger.info(
+                "Unparking: navigating from %s to cameras page",
+                current_url[:80],
+            )
             await page.goto(
                 CAMERAS_URL,
                 wait_until="domcontentloaded",
                 timeout=120_000,
             )
-            await self._wait_for_page_content(page, "re-enter alarm.com")
+            await self._wait_for_page_content(page, "navigate to cameras")
             if _is_login_page(page.url):
                 logger.warning("Session expired during unpark")
                 self.state.auth_status = AuthStatus.LOGGED_OUT
                 return False
+            # Wait for the SPA to settle and video player to load
+            await asyncio.sleep(5)
 
         self.state.parked = False
         return await self._navigate_to_live_view(page, camera)

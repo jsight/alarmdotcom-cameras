@@ -217,10 +217,19 @@ async def parking_manager_task(app: web.Application) -> None:
                         "Manual burst starting for camera %s", camera_id
                     )
                     async with browser._lock:
-                        await browser.burst_capture(
+                        result = await browser.burst_capture(
                             camera_id, PARKING_BURST_MANUAL_DURATION
                         )
                         await browser.park()
+                    if result is None:
+                        # Navigation failed — clear request so we don't
+                        # retry in a tight loop for 60 seconds
+                        logger.warning(
+                            "Manual burst failed for %s, clearing request",
+                            camera_id,
+                        )
+                        browser.state.last_manual_request_time = 0.0
+                        browser.state.manual_burst_camera_id = None
 
             elif (now - last_periodic_burst) >= periodic_interval:
                 # Periodic burst mode — round-robin all cameras
