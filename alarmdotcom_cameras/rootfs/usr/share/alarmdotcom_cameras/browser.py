@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 ALARM_BASE_URL = "https://www.alarm.com"
 LOGIN_URL = f"{ALARM_BASE_URL}/login"
 CAMERAS_URL = f"{ALARM_BASE_URL}/web/video"
+DASHBOARD_URL = f"{ALARM_BASE_URL}/web/dashboard"
 
 
 def _is_login_page(url: str) -> bool:
@@ -105,6 +106,9 @@ class BrowserState:
     last_snapshot_time: float = 0.0
     startup_time: float = field(default_factory=time.time)
     browser_alive: bool = False
+    parked: bool = False
+    last_manual_request_time: float = 0.0
+    manual_burst_camera_id: str | None = None
     console_logs: collections.deque = field(
         default_factory=lambda: collections.deque(maxlen=200),
         repr=False,
@@ -1966,6 +1970,7 @@ class BrowserEngine:
             return None
 
         page = await self._get_page()
+        self.state.parked = False
 
         try:
             if not await self._navigate_to_live_view(page, camera):
@@ -2059,6 +2064,143 @@ class BrowserEngine:
             except Exception:
                 pass
         return None
+
+    # ---- Browser Parking ----
+
+    async def park(self) -> None:
+        """Navigate to the alarm.com dashboard to stop video streaming.
+
+        Keeps the session alive while reducing load on alarm.com's
+        video infrastructure.  Must be called with self._lock held.
+        """
+        try:
+            page = await self._get_page()
+            # Click the dashboard nav link if we're in the SPA
+            dash_link = await page.query_selector(
+                'a[data-testid="dashboard-link"], '
+                'a[href*="/web/dashboard"]'
+            )
+            if dash_link:
+                await dash_link.click()
+                await asyncio.sleep(3)
+            else:
+                # Fallback: navigate directly (re-enters the SPA)
+                await page.goto(
+                    DASHBOARD_URL,
+                    wait_until="domcontentloaded",
+                    timeout=60_000,
+                )
+                await asyncio.sleep(3)
+            self.state.parked = True
+            logger.info("Browser parked on dashboard")
+        except Exception:
+            logger.exception("Failed to park browser")
+
+    async def unpark_to_camera(self, camera_id: str) -> bool:
+        """Navigate from parked state to a camera's live view.
+
+        Must be called with self._lock held.  Returns True if the
+        live view is showing video content.
+        """
+        camera = next((c for c in self.state.cameras if c.id == camera_id), None)
+        if not camera:
+            logger.warning("Cannot unpark: camera %s not found", camera_id)
+            return False
+
+        page = await self._get_page()
+        current_url = page.url
+
+        # If we're not on alarm.com at all, re-enter via goto
+        if ALARM_BASE_URL not in current_url:
+            await page.goto(
+                CAMERAS_URL,
+                wait_until="domcontentloaded",
+                timeout=120_000,
+            )
+            await self._wait_for_page_content(page, "re-enter alarm.com")
+            if _is_login_page(page.url):
+                logger.warning("Session expired during unpark")
+                self.state.auth_status = AuthStatus.LOGGED_OUT
+                return False
+
+        self.state.parked = False
+        return await self._navigate_to_live_view(page, camera)
+
+    async def burst_capture(
+        self, camera_id: str, duration_seconds: int
+    ) -> bytes | None:
+        """Capture frames at ~1fps for *duration_seconds*.
+
+        Must be called with self._lock held.  Returns the first captured
+        frame, or None on failure.  Subsequent frames are saved to the
+        snapshot cache.  If ``last_manual_request_time`` is updated during
+        the burst (new manual request), the timer resets so the burst
+        continues for another full duration.
+        """
+        if not await self.unpark_to_camera(camera_id):
+            return None
+
+        page = await self._get_page()
+        video_elem = await page.query_selector(SELECTORS["video_element"])
+        if not video_elem:
+            try:
+                video_elem = await page.wait_for_selector(
+                    SELECTORS["video_element"], timeout=15_000
+                )
+            except Exception:
+                logger.warning("No video element found for burst capture")
+                return None
+
+        # Give the video a moment to start rendering
+        await asyncio.sleep(2)
+
+        first_frame: bytes | None = None
+        burst_start = time.time()
+        deadline = burst_start + duration_seconds
+        frame_count = 0
+
+        while time.time() < deadline:
+            # Check if a stream started (yield to it)
+            if self.state.active_stream_camera:
+                logger.info("Burst yielding to active stream")
+                break
+
+            try:
+                screenshot = await video_elem.screenshot()
+                jpeg = self._to_jpeg(screenshot)
+                self._save_snapshot(camera_id, jpeg)
+                frame_count += 1
+                if first_frame is None:
+                    first_frame = jpeg
+
+                # If a new manual request came in, extend the deadline
+                manual_age = time.time() - self.state.last_manual_request_time
+                if manual_age < 2.0:
+                    new_deadline = self.state.last_manual_request_time + duration_seconds
+                    if new_deadline > deadline:
+                        deadline = new_deadline
+                        logger.debug("Burst deadline extended by new manual request")
+
+            except Exception:
+                # Video element may have gone away - try to re-acquire
+                try:
+                    video_elem = await page.wait_for_selector(
+                        SELECTORS["video_element"], timeout=5_000
+                    )
+                except Exception:
+                    logger.warning("Lost video element during burst")
+                    break
+
+            await asyncio.sleep(1)
+
+        elapsed = time.time() - burst_start
+        logger.info(
+            "Burst capture ended for %s: %d frames in %.1fs",
+            camera_id,
+            frame_count,
+            elapsed,
+        )
+        return first_frame
 
     # ---- Live Stream (Screenshot Loop) ----
 
@@ -2176,6 +2318,9 @@ class BrowserEngine:
         Does NOT navigate — uses the current page state and cookies to
         determine if the session is alive.  Navigating (page.goto) would
         destroy the Ember SPA context.
+
+        When parked on the dashboard, checks that the page is still on
+        an alarm.com /web/ path (not redirected to login).
         """
         if not self._context:
             return False
@@ -2303,4 +2448,5 @@ class BrowserEngine:
                 else None
             ),
             "active_stream": self.state.active_stream_camera,
+            "parked": self.state.parked,
         }

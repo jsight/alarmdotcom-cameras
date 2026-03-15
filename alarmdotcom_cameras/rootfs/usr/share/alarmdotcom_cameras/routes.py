@@ -22,7 +22,7 @@ async def health_check(request: web.Request) -> web.Response:
     browser: BrowserEngine = request.app["browser"]
     health = browser.get_health()
     health["status"] = "ok"
-    health["version"] = "0.1.21"
+    health["version"] = "0.1.22"
     # Include config for the settings display
     config = request.app["config"]
     health["snapshot_interval"] = config["snapshot_interval"]
@@ -239,9 +239,19 @@ async def get_snapshot(request: web.Request) -> web.Response:
 
 
 async def capture_snapshot(request: web.Request) -> web.Response:
-    """Trigger a fresh snapshot capture and return the image."""
+    """Trigger a fresh snapshot capture and return the image.
+
+    Also signals the parking manager to start a 60-second burst of
+    continuous captures for this camera.
+    """
+    import time
+
     camera_id = request.match_info["camera_id"]
     browser: BrowserEngine = request.app["browser"]
+
+    # Signal the parking manager to start/extend a manual burst
+    browser.state.last_manual_request_time = time.time()
+    browser.state.manual_burst_camera_id = camera_id
 
     async with browser._lock:
         jpeg = await browser.capture_snapshot(camera_id)

@@ -1,5 +1,5 @@
 name: Alarm.com Cameras
-version: "0.1.21"
+version: "0.1.22"
 slug: alarmdotcom_cameras
 description: "View Alarm.com camera snapshots and live streams via a headless browser."
 image: "ghcr.io/jsight/alarmdotcom-cameras-{arch}"
@@ -21,7 +21,7 @@ panel_admin: true
 
 # Options exposed in HA UI
 options:
-  snapshot_interval_minutes: 10
+  snapshot_interval_minutes: 30
   stream_fps: 1
   stream_timeout_minutes: 5
   jpeg_quality: 80

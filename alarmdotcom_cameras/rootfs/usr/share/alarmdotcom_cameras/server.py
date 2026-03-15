@@ -5,6 +5,7 @@ import asyncio
 import collections
 import logging
 import pathlib
+import time
 
 from aiohttp import web
 
@@ -43,8 +44,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--snapshot-interval",
         type=int,
-        default=10,
-        help="Minutes between periodic snapshots",
+        default=30,
+        help="Minutes between periodic snapshot bursts (default: 30)",
     )
     parser.add_argument("--stream-fps", type=float, default=1.0)
     parser.add_argument(
@@ -142,6 +143,8 @@ async def session_health_task(app: web.Application) -> None:
                         if status.value == "authenticated":
                             logger.info("Re-login successful")
                             await browser.discover_cameras()
+                            async with browser._lock:
+                                await browser.park()
                         elif status.value in ("captcha_required", "2fa_required"):
                             logger.warning(
                                 "Re-login requires user action: %s", status.value
@@ -154,85 +157,112 @@ async def session_health_task(app: web.Application) -> None:
             logger.exception("Error in session health monitor")
 
 
-async def periodic_snapshot_task(app: web.Application) -> None:
-    """Background task that captures snapshots on a timer.
+PARKING_BURST_MANUAL_DURATION = 60  # seconds of burst after manual trigger
+PARKING_BURST_PERIODIC_DURATION = 20  # seconds of burst for periodic check
+PARKING_PERIODIC_INTERVAL = 1800  # 30 minutes between periodic bursts
 
-    Round-robins through cameras one at a time. Skips cameras that
-    had recent errors. Yields to active streams.
+
+async def parking_manager_task(app: web.Application) -> None:
+    """Background task that manages browser parking and burst captures.
+
+    The browser stays parked on the alarm.com dashboard most of the time
+    to avoid constant load on alarm.com's video infrastructure.
+
+    Two burst modes:
+    - Manual: triggered by a capture_snapshot API call, captures at ~1fps
+      for 60 seconds then parks.
+    - Periodic: every 30 minutes, captures at ~1fps for 20 seconds across
+      all cameras then parks.
     """
-    interval = app["config"]["snapshot_interval"] * 60  # convert to seconds
     browser: BrowserEngine = app["browser"]
-    error_counts: dict[str, int] = {}
-    MAX_CONSECUTIVE_ERRORS = 3
+    periodic_interval = app["config"]["snapshot_interval"] * 60
+    last_periodic_burst = time.time()  # don't burst immediately at startup
 
-    logger.info("Periodic snapshot task started (interval: %ds)", interval)
+    logger.info(
+        "Parking manager started (periodic every %ds, manual burst %ds, "
+        "periodic burst %ds)",
+        periodic_interval,
+        PARKING_BURST_MANUAL_DURATION,
+        PARKING_BURST_PERIODIC_DURATION,
+    )
+
+    # Park the browser initially (after login/discovery in on_startup)
+    await asyncio.sleep(10)
+    if browser.state.auth_status.value == "authenticated":
+        try:
+            async with browser._lock:
+                await browser.park()
+        except Exception:
+            logger.debug("Initial park failed (non-critical)")
 
     while True:
-        await asyncio.sleep(interval)
         try:
+            await asyncio.sleep(2)
+
             if browser.state.auth_status.value != "authenticated":
-                logger.debug("Skipping periodic snapshots: not authenticated")
+                continue
+            if not browser.state.cameras:
+                continue
+            if browser.state.active_stream_camera:
                 continue
 
-            cameras = browser.state.cameras
-            if not cameras:
-                logger.debug("Skipping periodic snapshots: no cameras discovered")
-                continue
+            now = time.time()
+            manual_age = now - browser.state.last_manual_request_time
 
-            for camera in cameras:
-                # Don't interrupt an active stream
-                if browser.state.active_stream_camera:
-                    logger.debug(
-                        "Skipping snapshot for %s: stream active on %s",
-                        camera.id,
-                        browser.state.active_stream_camera,
+            if manual_age < PARKING_BURST_MANUAL_DURATION:
+                # Manual burst mode — capture the requested camera
+                camera_id = browser.state.manual_burst_camera_id
+                if camera_id:
+                    logger.info(
+                        "Manual burst starting for camera %s", camera_id
                     )
-                    continue
+                    async with browser._lock:
+                        await browser.burst_capture(
+                            camera_id, PARKING_BURST_MANUAL_DURATION
+                        )
+                        await browser.park()
 
-                # Skip cameras with too many consecutive errors
-                if error_counts.get(camera.id, 0) >= MAX_CONSECUTIVE_ERRORS:
-                    logger.debug(
-                        "Skipping snapshot for %s: %d consecutive errors",
-                        camera.id,
-                        error_counts[camera.id],
-                    )
-                    continue
-
+            elif (now - last_periodic_burst) >= periodic_interval:
+                # Periodic burst mode — round-robin all cameras
+                cameras = browser.state.cameras
+                per_camera = max(
+                    PARKING_BURST_PERIODIC_DURATION // len(cameras), 5
+                )
                 logger.info(
-                    "Periodic snapshot for camera %s (%s)", camera.id, camera.name
+                    "Periodic burst starting for %d camera(s) "
+                    "(%ds each)",
+                    len(cameras),
+                    per_camera,
                 )
                 async with browser._lock:
-                    result = await browser.capture_snapshot(camera.id)
+                    for camera in cameras:
+                        if browser.state.active_stream_camera:
+                            break
+                        # If a manual request came in, abort periodic burst
+                        if (
+                            time.time() - browser.state.last_manual_request_time
+                            < PARKING_BURST_MANUAL_DURATION
+                        ):
+                            logger.info(
+                                "Periodic burst interrupted by manual request"
+                            )
+                            break
+                        await browser.burst_capture(camera.id, per_camera)
+                    await browser.park()
+                last_periodic_burst = time.time()
 
-                if result:
-                    error_counts[camera.id] = 0
-                    logger.info(
-                        "Snapshot captured for %s (%d bytes)",
-                        camera.id,
-                        len(result),
-                    )
-                else:
-                    error_counts[camera.id] = error_counts.get(camera.id, 0) + 1
-                    logger.warning(
-                        "Snapshot failed for %s (attempt %d/%d)",
-                        camera.id,
-                        error_counts[camera.id],
-                        MAX_CONSECUTIVE_ERRORS,
-                    )
-
-                # Brief pause between cameras to avoid hammering
-                await asyncio.sleep(5)
-
-            # Reset error counts periodically (every full cycle) so cameras
-            # that had transient errors get retried
-            for cam_id in list(error_counts.keys()):
-                if error_counts[cam_id] < MAX_CONSECUTIVE_ERRORS:
-                    error_counts[cam_id] = 0
+            elif not browser.state.parked:
+                # Not in burst and not parked — park now
+                try:
+                    async with browser._lock:
+                        await browser.park()
+                except Exception:
+                    logger.debug("Park attempt failed (non-critical)")
 
         except asyncio.CancelledError:
             return
         except Exception:
-            logger.exception("Error in periodic snapshot task")
+            logger.exception("Error in parking manager")
 
 
 async def on_startup(app: web.Application) -> None:
@@ -266,7 +296,7 @@ async def on_startup(app: web.Application) -> None:
             await browser.discover_cameras()
 
     # Start background tasks
-    app["snapshot_task"] = asyncio.create_task(periodic_snapshot_task(app))
+    app["parking_task"] = asyncio.create_task(parking_manager_task(app))
     app["health_task"] = asyncio.create_task(session_health_task(app))
 
 
@@ -275,7 +305,7 @@ async def on_shutdown(app: web.Application) -> None:
     logger.info("Alarm.com Cameras add-on shutting down")
 
     # Cancel background tasks
-    for task_name in ("snapshot_task", "health_task"):
+    for task_name in ("parking_task", "health_task"):
         task = app.get(task_name)
         if task:
             task.cancel()

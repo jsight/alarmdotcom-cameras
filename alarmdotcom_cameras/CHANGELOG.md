@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.22
+
+### Added - Browser parking to reduce alarm.com load
+
+- **Browser parking** — the headless browser now navigates to the
+  alarm.com dashboard when not actively capturing, instead of sitting
+  on the video page 24/7.  This significantly reduces load on
+  alarm.com's video infrastructure.
+- **Manual burst capture (60s)** — when a snapshot is triggered via the
+  HA service call or refresh button, the browser captures at ~1fps for
+  60 seconds then parks back on the dashboard.  Additional requests
+  during a burst extend the timer.
+- **Periodic burst capture (20s)** — every 30 minutes (configurable),
+  the browser wakes up, captures snapshots for 20 seconds across all
+  cameras, then parks again.
+- **Default snapshot interval** changed from 10 to 30 minutes to be
+  more considerate of alarm.com's servers.
+
 ## 0.1.21
 
 ### Added - Snapshot refresh button on camera card
