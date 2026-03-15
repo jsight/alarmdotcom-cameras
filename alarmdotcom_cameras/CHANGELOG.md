@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.23
+## 0.1.24
 
 ### Added - Browser parking to reduce alarm.com load
 
