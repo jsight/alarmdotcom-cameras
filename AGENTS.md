@@ -38,3 +38,26 @@ bd sync               # Sync with git
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
+## alarm.com Browser Engine Rules
+
+### NEVER use page.goto() after login
+alarm.com is an **Ember SPA**. The `/web/*` routes (e.g. `/web/video`, `/web/dashboard`) are **client-side only** — they don't exist as server-side routes. Hitting them with `page.goto()` destroys the SPA and returns "Page Not Found".
+
+- `page.goto()` is ONLY safe for the initial login (`/login` is a real server route)
+- All post-login navigation MUST use SPA nav link clicks (e.g. `a[data-testid="video-link"]`)
+- Parking/unparking the browser must click nav links, never `page.goto()`
+
+### SPA nav selectors
+- **Video page**: `a[data-testid="video-link"]`
+- **Home page**: `a[data-testid="home-link"]`
+- **General**: `a[data-testid]` lists all SPA nav links
+
+### Version bumps require updating 6 files
+When bumping versions, ALL of these must be updated:
+1. `alarmdotcom_cameras/config.yaml`
+2. `alarmdotcom_cameras/CHANGELOG.md`
+3. `alarmdotcom_cameras/rootfs/usr/share/alarmdotcom_cameras/routes.py`
+4. `alarmdotcom_cameras/rootfs/usr/share/alarmdotcom_cameras/static/index.html`
+5. `alarmdotcom_cameras/custom_components/alarmdotcom_cameras/manifest.json`
+6. `custom_components/alarmdotcom_cameras/manifest.json`
+
