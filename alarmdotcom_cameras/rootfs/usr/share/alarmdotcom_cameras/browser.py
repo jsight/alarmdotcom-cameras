@@ -1909,9 +1909,7 @@ class BrowserEngine:
             if video:
                 logger.info("Already on video page with player visible")
                 return True
-            logger.info(
-                "On video page but no video element yet, checking for retry"
-            )
+            logger.info("On video page but no video element yet, checking for retry")
             # Check for video error with Retry button
             await self._retry_video_player(page)
             video = await page.query_selector(SELECTORS["video_element"])
@@ -1938,9 +1936,7 @@ class BrowserEngine:
             await video_link.click()
             await self._wait_for_page_content(page, "video nav", timeout=30)
             await asyncio.sleep(5)
-            logger.info(
-                "After video link click, URL=%s", page.url[:120]
-            )
+            logger.info("After video link click, URL=%s", page.url[:120])
 
             # Check for video player error and retry if needed
             await self._retry_video_player(page)
@@ -1961,9 +1957,7 @@ class BrowserEngine:
             except Exception:
                 logger.info("Video element did not appear after nav")
         else:
-            logger.info(
-                "No video-link nav element found on page"
-            )
+            logger.info("No video-link nav element found on page")
 
         # Log what we can see on the page to help debug
         try:
@@ -2172,9 +2166,7 @@ class BrowserEngine:
                 await home_link.click()
                 await asyncio.sleep(3)
                 self.state.parked = True
-                logger.info(
-                    "Browser parked (URL: %s)", page.url[:80]
-                )
+                logger.info("Browser parked (URL: %s)", page.url[:80])
                 return
 
             # Try broader selectors — look for any nav link that isn't Video
@@ -2182,9 +2174,7 @@ class BrowserEngine:
             for link in nav_links:
                 testid = await link.get_attribute("data-testid")
                 if testid and "video" not in testid.lower():
-                    logger.info(
-                        "Parking: clicking non-video nav link: %s", testid
-                    )
+                    logger.info("Parking: clicking non-video nav link: %s", testid)
                     await link.click()
                     await asyncio.sleep(3)
                     self.state.parked = True
@@ -2197,9 +2187,7 @@ class BrowserEngine:
 
             # Last resort: just mark as parked — we'll be on the video page
             # but at least we won't destroy the SPA with page.goto()
-            logger.warning(
-                "Could not find nav link to park, staying on video page"
-            )
+            logger.warning("Could not find nav link to park, staying on video page")
             self.state.parked = True
         except Exception:
             logger.exception("Failed to park browser")
@@ -2289,7 +2277,9 @@ class BrowserEngine:
                 # If a new manual request came in, extend the deadline
                 manual_age = time.time() - self.state.last_manual_request_time
                 if manual_age < 2.0:
-                    new_deadline = self.state.last_manual_request_time + duration_seconds
+                    new_deadline = (
+                        self.state.last_manual_request_time + duration_seconds
+                    )
                     if new_deadline > deadline:
                         deadline = new_deadline
                         logger.debug("Burst deadline extended by new manual request")

@@ -213,9 +213,7 @@ async def parking_manager_task(app: web.Application) -> None:
                 # Manual burst mode — capture the requested camera
                 camera_id = browser.state.manual_burst_camera_id
                 if camera_id:
-                    logger.info(
-                        "Manual burst starting for camera %s", camera_id
-                    )
+                    logger.info("Manual burst starting for camera %s", camera_id)
                     async with browser._lock:
                         result = await browser.burst_capture(
                             camera_id, PARKING_BURST_MANUAL_DURATION
@@ -234,12 +232,9 @@ async def parking_manager_task(app: web.Application) -> None:
             elif (now - last_periodic_burst) >= periodic_interval:
                 # Periodic burst mode — round-robin all cameras
                 cameras = browser.state.cameras
-                per_camera = max(
-                    PARKING_BURST_PERIODIC_DURATION // len(cameras), 5
-                )
+                per_camera = max(PARKING_BURST_PERIODIC_DURATION // len(cameras), 5)
                 logger.info(
-                    "Periodic burst starting for %d camera(s) "
-                    "(%ds each)",
+                    "Periodic burst starting for %d camera(s) (%ds each)",
                     len(cameras),
                     per_camera,
                 )
@@ -252,9 +247,7 @@ async def parking_manager_task(app: web.Application) -> None:
                             time.time() - browser.state.last_manual_request_time
                             < PARKING_BURST_MANUAL_DURATION
                         ):
-                            logger.info(
-                                "Periodic burst interrupted by manual request"
-                            )
+                            logger.info("Periodic burst interrupted by manual request")
                             break
                         await browser.burst_capture(camera.id, per_camera)
                     await browser.park()
