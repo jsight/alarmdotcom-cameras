@@ -22,7 +22,7 @@ async def health_check(request: web.Request) -> web.Response:
     browser: BrowserEngine = request.app["browser"]
     health = browser.get_health()
     health["status"] = "ok"
-    health["version"] = "0.1.25"
+    health["version"] = "0.1.26"
     # Include config for the settings display
     config = request.app["config"]
     health["snapshot_interval"] = config["snapshot_interval"]

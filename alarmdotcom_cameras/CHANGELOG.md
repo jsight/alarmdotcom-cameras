@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.26
+
+### Fixed - Cleaner snapshots and SPA navigation
+
+- **Remove UI chrome from snapshots** — screenshots now capture just the
+  bare `<video>` element instead of the `.video-player` container, which
+  was including the HD button, PIP/fullscreen controls, camera name bar,
+  and black letterboxing around the video.
+- **Fix SPA navigation** — use alarm.com's `data-testid` nav link clicks
+  instead of `page.goto()`, which broke the Ember SPA and caused session
+  errors.
+
 ## 0.1.25
 
 ### Added - Browser parking to reduce alarm.com load
