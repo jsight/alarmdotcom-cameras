@@ -56,7 +56,9 @@ SELECTORS = {
     "camera_item": '.video-camera-card, .camera-item, [class*="camera-card"], [data-camera-id]',
     "camera_name": ".camera-name, .camera-description, .device-name, .bottom-bar-camera-name, h3, h4",
     "camera_link": 'a[href*="video"], a[href*="camera"]',
-    # Video player (for snapshots)
+    # Video media element (actual <video>/<canvas> tag — no surrounding chrome)
+    "video_media": "video, canvas",
+    # Video player container (includes controls/chrome — used as fallback)
     "video_element": 'video, canvas, .video-player, .webrtc-player, [class*="video-container"], [class*="video-stream"], [class*="live-view"]',
     # WebRTC player containers (for camera discovery from live view)
     "webrtc_player": '[id*="webrtc-player"], .video-player.webrtc-player, .live-video-player',
@@ -1623,9 +1625,7 @@ class BrowserEngine:
             if cameras and "/video" in page.url:
                 for cam in cameras:
                     try:
-                        video_elem = await page.query_selector(
-                            SELECTORS["video_element"]
-                        )
+                        video_elem = await self._find_video_for_screenshot(page)
                         if video_elem:
                             await asyncio.sleep(2)
                             screenshot = await video_elem.screenshot()
@@ -2045,10 +2045,9 @@ class BrowserEngine:
             if not await self.unpark_to_camera(camera_id):
                 return None
 
-            # Try to screenshot just the video player element
-            video_elem = await page.query_selector(SELECTORS["video_element"])
+            # Screenshot the video element (prefer bare <video>/<canvas>)
+            video_elem = await self._find_video_for_screenshot(page)
             if video_elem:
-                # Give the video a moment to render a frame
                 await asyncio.sleep(2)
                 screenshot_bytes = await video_elem.screenshot()
                 jpeg_bytes = self._to_jpeg(screenshot_bytes)
@@ -2069,6 +2068,36 @@ class BrowserEngine:
 
         except Exception:
             logger.exception("Failed to capture snapshot for camera %s", camera_id)
+
+    async def _find_video_for_screenshot(self, page) -> object | None:
+        """Find the best element to screenshot — prefer bare <video>/<canvas>."""
+        # Try the bare media element first (no surrounding chrome/controls)
+        elem = await page.query_selector(SELECTORS["video_media"])
+        if elem:
+            return elem
+        # Fall back to the broader container selector
+        return await page.query_selector(SELECTORS["video_element"])
+
+    async def _wait_for_video_screenshot(
+        self, page, timeout: int = 15_000
+    ) -> object | None:
+        """Wait for a video element suitable for screenshots."""
+        # Try bare media first
+        try:
+            elem = await page.wait_for_selector(
+                SELECTORS["video_media"], timeout=timeout
+            )
+            if elem:
+                return elem
+        except Exception:
+            pass
+        # Fall back to broader selector
+        try:
+            return await page.wait_for_selector(
+                SELECTORS["video_element"], timeout=5_000
+            )
+        except Exception:
+            return None
 
     def _to_jpeg(self, png_bytes: bytes) -> bytes:
         """Convert PNG screenshot to JPEG with configured quality."""
@@ -2242,13 +2271,10 @@ class BrowserEngine:
             return None
 
         page = await self._get_page()
-        video_elem = await page.query_selector(SELECTORS["video_element"])
+        video_elem = await self._find_video_for_screenshot(page)
         if not video_elem:
-            try:
-                video_elem = await page.wait_for_selector(
-                    SELECTORS["video_element"], timeout=15_000
-                )
-            except Exception:
+            video_elem = await self._wait_for_video_screenshot(page)
+            if not video_elem:
                 logger.warning("No video element found for burst capture")
                 return None
 
@@ -2286,13 +2312,15 @@ class BrowserEngine:
 
             except Exception:
                 # Video element may have gone away - try to re-acquire
-                try:
-                    video_elem = await page.wait_for_selector(
-                        SELECTORS["video_element"], timeout=5_000
-                    )
-                except Exception:
-                    logger.warning("Lost video element during burst")
-                    break
+                video_elem = await self._find_video_for_screenshot(page)
+                if not video_elem:
+                    try:
+                        video_elem = await page.wait_for_selector(
+                            SELECTORS["video_media"], timeout=5_000
+                        )
+                    except Exception:
+                        logger.warning("Lost video element during burst")
+                        break
 
             await asyncio.sleep(1)
 
@@ -2345,11 +2373,9 @@ class BrowserEngine:
                 self.state.active_stream_camera = None
                 return
 
-            video_elem = await page.query_selector(SELECTORS["video_element"])
+            video_elem = await self._find_video_for_screenshot(page)
             if not video_elem:
-                video_elem = await page.wait_for_selector(
-                    SELECTORS["video_element"], timeout=15_000
-                )
+                video_elem = await self._wait_for_video_screenshot(page)
             # Give the video a moment to start rendering
             await asyncio.sleep(2)
 
@@ -2362,15 +2388,21 @@ class BrowserEngine:
                     yield jpeg
                 except Exception:
                     # Video element may have disappeared - try to re-find it
-                    try:
-                        video_elem = await page.wait_for_selector(
-                            SELECTORS["video_element"], timeout=5_000
+                    video_elem = await self._find_video_for_screenshot(page)
+                    if not video_elem:
+                        video_elem = await self._wait_for_video_screenshot(
+                            page, timeout=5_000
                         )
-                        screenshot = await video_elem.screenshot()
-                        jpeg = self._to_jpeg(screenshot)
-                        self.state.stream_frame_count += 1
-                        yield jpeg
-                    except Exception:
+                    if video_elem:
+                        try:
+                            screenshot = await video_elem.screenshot()
+                            jpeg = self._to_jpeg(screenshot)
+                            self.state.stream_frame_count += 1
+                            yield jpeg
+                        except Exception:
+                            logger.warning("Lost video element during stream")
+                            break
+                    else:
                         logger.warning("Lost video element during stream")
                         break
 
